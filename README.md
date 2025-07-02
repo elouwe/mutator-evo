@@ -69,7 +69,7 @@ Planned improvements:
 Clone the repo and install dependencies:
 
 ```bash
-git clone https://github.com/your-username/mutatorevo.git
+git clone https://github.com/elouwe/mutatorevo.git
 cd mutatorevo
 pip install -r requirements.txt
 ```
