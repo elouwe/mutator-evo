@@ -28,7 +28,6 @@ You provide initial strategies — Mutatorevo mutates, crosses, filters, and ret
 - [x] Step 3: Visualization of evolutionary progress
 - [ ] Step 4: Adapter for Backtrader
 - [ ] Step 5: Validation on OOS data
-- [ ] Step 6: Tests on historical crises
 
 **Logging & Monitoring Implementation (Structlog + Sentry + Visualizations)**  
 
@@ -87,9 +86,10 @@ Planned improvements:
 Clone the repo and install dependencies:
 
 ```bash
-git clone https://github.com/elouwe/mutatorevo.git
-cd mutatorevo
+git clone https://github.com/elouwe/mutator-evo.git
+cd mutator-evo
 pip install -r requirements.txt
+pip install -e .
 ```
 
 ## 🧪 Running the Evolution
