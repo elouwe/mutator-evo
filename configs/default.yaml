@@ -1,0 +1,23 @@
+evolution:
+  top_k: 8
+  n_mutants: 5
+  max_age: 20
+  checkpoint_every: 10
+  
+mutation_probs:
+  add: 0.35
+  drop: 0.25
+  shift: 0.20
+  invert: 0.10
+  metaboost: 0.05
+  crossover: 0.30
+  
+adaptation:
+  learning_rate: 0.01
+  max_mutation_rate: 0.5
+  min_mutation_rate: 0.05
+
+backtest:
+  adapter: vectorized  # vectorized | backtrader
+  oos_ratio: 0.3       # out-of-sample of the data
+  max_duration: "5y"   # Max. test period
