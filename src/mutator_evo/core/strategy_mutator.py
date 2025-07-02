@@ -1,3 +1,4 @@
+# src/mutator_evo/core/strategy_mutator.py
 from __future__ import annotations
 
 import json
@@ -28,9 +29,9 @@ class StrategyMutatorV2:
         self.config = DynamicConfig(**kwargs)
         self._init_operators()
         
-        self.checkpoint_every = 5
-        self.checkpoint_dir = pathlib.Path("checkpoints")
-        self.checkpoint_dir.mkdir(exist_ok=True)
+        self.checkpoint_every = kwargs.get('checkpoint_every', 5)
+        self.checkpoint_dir = pathlib.Path(kwargs.get('checkpoint_dir', "checkpoints"))
+        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         self._tick = 0
         
         self.feature_bank: Set[str] = set()
@@ -53,25 +54,22 @@ class StrategyMutatorV2:
 
     def _tweak(self, feats: Dict[str, Any]) -> Dict[str, Any]:
         """Apply mutations to strategy features"""
-        feats = dict(feats)  # Create a copy
-        
         for operator in self.mutation_operators:
             try:
                 feats = operator.apply(
-                    features=feats,
-                    config=self.config,
-                    feature_bank=self.feature_bank,
-                    importance=self.importance
+                    feats, 
+                    self.config, 
+                    self.feature_bank, 
+                    self.importance
                 )
             except Exception as e:
-                print(f"Operator error {type(operator).__name__}: {str(e)}")
+                print(f"Error in operator {type(operator).__name__}: {str(e)}")
                 continue
-                
         return feats
 
     def evolve(self) -> None:
         if self.frozen:
-            print("[mutator] ⏸️ frozen – evolve() skipped")
+            print("[mutator] ⏸️ frozen - evolve() skipped")
             return
 
         if not self.strategy_pool:
@@ -81,95 +79,102 @@ class StrategyMutatorV2:
         self.step += 1
         
         try:
-            # 1) Sorting and selection
+            # 1) Sort pool by scores
             self.strategy_pool.sort(key=lambda s: s.score(), reverse=True)
-            top = self.strategy_pool[:self.config.top_k]
-            
-            # 2) Feature importance calculation
+            top_k = min(self.config.top_k, len(self.strategy_pool))
+            top = self.strategy_pool[:top_k]
+
+            # 2) Calculate feature importance
             self.importance = self.importance_calculator.compute(top)
-            
-            # 3) New strategy generation
-            new_strategies = []
+
+            # 3) Trim pool (elitism)
+            self.strategy_pool = top.copy()
+
+            # 4) Generate mutants
+            new = []
             for _ in range(self.config.n_mutants):
-                # Parent selection
-                if random.random() < self.config.mutation_probs["crossover"] and len(top) >= 2:
+                if (
+                    random.random() < self.config.mutation_probs["crossover"]
+                    and len(top) >= 2
+                ):
                     p1, p2 = random.sample(top, 2)
                     parent_feats = {**p1.features, **p2.features}
                 else:
-                    parent = random.choices(
-                        top,
-                        weights=[max(s.score(), 0.0) + 1e-3 for s in top]
-                    )[0]
+                    weights = [max(s.score(), 0.0) + 1e-3 for s in top]
+                    parent = random.choices(top, weights=weights)[0]
                     parent_feats = dict(parent.features)
-                
-                # Apply mutations
+
                 mutant_feats = self._tweak(parent_feats)
-                new_strategies.append(
-                    StrategyEmbedding(
-                        name=f"mut_{uuid.uuid4().hex[:8]}",
-                        features=mutant_feats
-                    )
+                name = f"mut_{uuid.uuid4().hex[:8]}"
+
+                new_strat = StrategyEmbedding(
+                    name=name,
+                    features=mutant_feats
                 )
-            
-            # 4) Pool update
-            self.strategy_pool = top + new_strategies
-            
-            # 5) Parameter adaptation
-            if new_strategies:
-                best_new_score = max(s.score() for s in new_strategies)
+                new.append(new_strat)
+
+            self.strategy_pool.extend(new)
+
+            # 5) Update config based on performance
+            if new:
+                best_new_score = max(s.score() for s in new)
                 self.config.update_based_on_performance(best_new_score)
-            
+
             # 6) Logging
-            best = top[0] if top else None
+            best = self.strategy_pool[0] if self.strategy_pool else None
             print(
-                f"[EVO] {date.today()} pool={len(self.strategy_pool)} "
-                f"new={len(new_strategies)} best={best.name if best else '-'} "
+                f"[EVO] {date.today()}  pool={len(self.strategy_pool)}  "
+                f"new={len(new)}  best={best.name if best else '—'} "
                 f"best_score={best.score() if best else 0:.2f}"
             )
-            
-            # 7) Checkpoint
+
             self._tick += 1
             if self._tick % self.checkpoint_every == 0:
                 self.save_checkpoint()
                 
         except Exception as e:
-            print(f"Evolution cycle error: {str(e)}")
+            print(f"Error in evolution cycle: {str(e)}")
             self._reinitialize_pool()
 
     def _reinitialize_pool(self):
-        """Reinitialize the strategy pool"""
-        print("[mutator] Strategy pool is empty - creating new strategies")
+        """Reinitialize strategy pool when empty"""
+        print("[mutator] Strategy pool empty - creating new strategies")
         self.strategy_pool = [
             StrategyEmbedding.create_random(self.feature_bank)
             for _ in range(max(20, self.config.top_k * 2))
         ]
 
     def save_checkpoint(self, path: Optional[str] = None) -> None:
-        """Save current state"""
         try:
             try:
                 import dill
             except ImportError:
                 import pickle as dill
                 
-            path = pathlib.Path(path or f"mutator_checkpoint_{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.pkl")
+            # Generate timestamped filename
+            ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+            filename = f"mutator_checkpoint_{ts}.pkl"
+            path = self.checkpoint_dir / filename
             
             with path.open("wb") as f:
-                dill.dump({
-                    "pool": self.strategy_pool,
-                    "archive": self.archival_pool,
-                    "config_params": self.config.params,
-                    "feature_bank": list(self.feature_bank),
-                    "current_equity": self.current_equity,
-                }, f)
-            print(f"💾 checkpoint → {path}")
+                dill.dump(
+                    {
+                        "pool": self.strategy_pool,
+                        "archive": self.archival_pool,
+                        "config_params": self.config.params,
+                        "feature_bank": list(self.feature_bank),
+                        "current_equity": self.current_equity,
+                        "importance": self.importance,  # Include feature importance
+                    },
+                    f,
+                )
+            print(f"💾 Checkpoint saved → {path}")
             
         except Exception as e:
-            print(f"Save error: {str(e)}")
+            print(f"Error saving checkpoint: {str(e)}")
 
     @classmethod
     def load_checkpoint(cls, path: str) -> "StrategyMutatorV2":
-        """Load saved state"""
         try:
             try:
                 import dill
@@ -178,21 +183,24 @@ class StrategyMutatorV2:
                 
             with pathlib.Path(path).open("rb") as f:
                 state = dill.load(f)
-                
-            self = cls(**state.get("config_params", {}))
+
+            # Create instance with saved config params
+            config_params = state.get("config_params", {})
+            self = cls(**config_params)
+            
+            # Restore state
             self.archival_pool = state.get("archive", [])
             self.strategy_pool = state.get("pool", [])
             self.feature_bank = set(state.get("feature_bank", set()))
             self.current_equity = state.get("current_equity", 0.0)
+            self.importance = state.get("importance", {})
             
-            if "config_params" in state:
-                self.config = DynamicConfig(**state["config_params"])
-                
             return self
             
         except Exception as e:
-            print(f"Load error: {str(e)}")
-            return cls()  # Return new mutator if error occurs
+            print(f"Error loading checkpoint: {str(e)}")
+            # Return new mutator on error
+            return cls()
 
     def freeze(self) -> None:
         self.frozen = True
