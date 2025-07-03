@@ -15,71 +15,73 @@ You provide initial strategies — Mutatorevo mutates, crosses, filters, and ret
 
 ## ⚙️ Features
 
-- Plug-and-play interface for strategy mutation & evaluation
-- Auto-tuning mutation system (`DynamicConfig`)
-- Modular and scalable architecture
-- Checkpointing and reproducibility
-- Ready for future integrations: logging, metrics, visual dashboards
+1. **Adaptive Genetic Engine**
+- Self-tuning mutation system (`DynamicConfig`) with UCB-based operator selection
+- 7+ modular genetic operators (crossover, RL mutation, etc.)
+- Real-time performance adaptation (impact-driven probability adjustment)
+
+2. **Intelligent Evaluation System**
+- Robust backtesting adapter with built-in safeguards
+- Multi-metric scoring (Sharpe, drawdown, overfitting penalty)
+- Automated train-test split (70/30 IS/OOS validation)
+
+3. **RL-Ready Architecture**
+- Neural network mutation operators (layer size, hyperparameters)
+- Integrated state-action space for RL agents
+- Compatible with future DRL integrations
+
+4. **Enterprise-Grade Features**
+- Automated checkpointing (emergency saves, version control)
+- SHAP-based feature importance analysis
+- Interactive visualization suite (Plotly, Matplotlib)
+- Structured logging (Sentry-ready)
 
 ## ✅ Completed Tasks
 
-- [x] Step 1: StrategyMutatorV2 Refactor
-- [x] Step 2: Structlog + Sentry for tracing errors
-- [x] Step 3: Visualization of evolutionary progress
-- [ ] Step 4: Adapter for Backtrader
-- [ ] Step 5: Validation on OOS data
+- [x] Step 6: Genetic operators:
+    * Crossover: uniform_crossover(parent1, parent2)
+    * Mutation of RL agents (change of neural network layers)
+- [x] Step 7: Prioritization system
+- [x] Step 8: Exploration/exploitation balance:
+    * UCB algorithm for mutation selection
+    * Auto-adjust mutation_probs
+- [ ] Step 9: Distributed computing
+- [ ] Step 10: Memory optimization:
+* Strategy compression (protobuf).
+* LRU-cache for backtests
 
-**Logging & Monitoring Implementation (Structlog + Sentry + Visualizations)**  
+**Logging & Monitoring Implementation (Struc**Step 6: Genetic Operators** - Fully implemented
+1. `UniformCrossover` (uniform crossing):
+   - File: `src/mutator_evo/operators/_uniform_crossover.py`.
+   - Implementation: Combines traits of two parent strategies
+   - Usage: In `StrategyMutatorV2.evolve()` when selecting two parents
 
-### **1. Logging System**  
-- **Structlog**  
-  - Structured JSON logging for all events (strategy creation, mutations, errors)  
-  - Automatic metadata: timestamps, log levels (INFO/ERROR), context (strategy names, scores)  
-  - Human-readable console output during development  
+2. RL agent mutation:
+   - File: `src/mutator_evo/operators/rl_mutation.py`.
+   - Implementation: Class `RLMutation`
+   - Functionality:
+     - Changing the number/size of neural network layers
+     - Setting hyperparameters (learning rate, gamma, epsilon)
+     - Adding noise to the network weights
 
-- **Sentry**  
-  - Real-time error tracking with crash reports  
-  - Alerts developers via email/Slack on critical failures  
-  - Captures full error context (stack traces, variable states)  
+**Step 7: Prioritization System** - Fully implemented
+- Mechanism: UCB (Upper Confidence Bound)
+- Implementation: `DynamicConfig.select_operator()`
+- Features:
+  - Tracking statistics by operator (n, total_impact)
+  - Balance between research and operation
+  - Automatic adaptation based on operator performance
 
-### **2. Evolution Progress Tracking**  
-- **Data Collected Each Generation**:  
-  - Best/average strategy scores  
-  - Number of features in top strategies  
-  - Mutation probabilities (add/drop/shift rates)  
-  - Top 5 most important features  
+**Step 8: Exploration/Exploitation Balance** - Fully implemented
+1. Dynamic adaptation of mutation probabilities:
+   - Method: `DynamicConfig.adapt_mutation_probs()`.
+   - Logic: Increases the probability of successful operators
 
-- **Visualizations**:  
-  - **Static Plots (Matplotlib)**: PNG images showing score trends and complexity growth  
-  - **Interactive Dashboards (Plotly)**: HTML files with zoomable charts and tooltips  
-  - **CSV Export**: Raw data for further analysis  
-
-### **Key Benefits**  
-1. **Transparency**: See exactly how strategies evolve  
-2. **Debugging**: Instant error alerts with Sentry + detailed logs  
-3. **Optimization**: Adjust mutation parameters based on visualized trends  
-
-**Automation**:  
-- Logs write themselves during runtime  
-- Visualizations auto-generate after each run (`evolution_progress.png`, `evolution_interactive.html`)  
-- Errors immediately notify developers  
-
-**Tech Stack**:  
-- `structlog` (structured logging)  
-- `sentry-sdk` (error monitoring)  
-- `matplotlib` + `plotly` (visualizations)  
-- `pandas` (data aggregation)  
-
-No manual steps required — everything runs on pipeline hooks.
-
-## 🧱 Coming Up
-
-### Logging & Monitoring System
-
-Planned improvements:
-- `structlog` + `Sentry` for structured logging and error tracing
-- Visualization of evolution progress (mutations, scores, survivor tree)
-- Interactive dashboard to monitor strategy performance over time
+2. Balance mechanisms:
+   - UCB to select operators
+   - Smooth change in probabilities (smoothing)
+   - Periodic reset when performance plateaus
+   - Accounting for historical performance ops
 
 ## 🛠️ Installation
 
@@ -108,66 +110,142 @@ You can modify the config file in `configs/` to set:
 
 ## Example Output
 
-After 100 evolutionary epochs, you’ll see a summary like this:
+After running the full evolution cycle, you’ll see a detailed log like this:
 
 ```
-=== Epoch 100/100 ===
-[EVO] 2025-07-02 pool=13 new=5 best=mut_b77fcb30 best_score=1.71
-💾 checkpoint → mutator_checkpoint_20250702-143618.pkl
-
-Evolution completed!
-Best strategy: Strategy(name=mut_4385417f, features=9)
-Features: ['volatility_filter', 'window_small', 'use_rsi', 'window_large', 'threshold_high', 'use_ema', 'threshold_low', 'use_macd', 'trend_filter']
-Score: 1.76
+Evolution completed successfully!
+2025-07-04 01:08:48,366 - __main__ - INFO - Best strategy: mut_5bd2a890
+2025-07-04 01:08:48,366 - __main__ - INFO - Features: ['ema_period', 'bollinger_period', 'stop_loss', 'use_stoch', 'macd_slow', 'rsi_period', 'rl_agent', 'stoch_k', 'stoch_d', 'use_rsi', 'sma_period', 'take_profit', 'use_sma', 'trade_size', 'adx_period']
+2025-07-04 01:08:48,366 - __main__ - INFO - Score: 10.00
+2025-07-04 01:08:48,366 - __main__ - INFO - OOS Sharpe: 23.97
+2025-07-04 01:08:48,366 - __main__ - INFO - OOS Drawdown: 8.15%
+2025-07-04 01:08:48,366 - __main__ - INFO - OOS Win Rate: 0.39
+2025-07-04 01:08:48,366 - __main__ - INFO - Trade count: 359
+2025-07-04 01:08:48,515 - __main__ - INFO - Generating visualizations...
+Found 6 checkpoint files
+Processed checkpoint mutator_checkpoint_20250704-005954.pkl (gen 1)
+Processed checkpoint mutator_checkpoint_20250704-010057.pkl (gen 2)
+Processed checkpoint mutator_checkpoint_20250704-010209.pkl (gen 3)
+Processed checkpoint mutator_checkpoint_20250704-010333.pkl (gen 4)
+Processed checkpoint mutator_checkpoint_20250704-010514.pkl (gen 5)
+Processed checkpoint mutator_checkpoint_20250704-010715.pkl (gen 6)
+Saved operator impact rates plot: data/operator_impact_rates.png
+Saved main evolution plot: data/evolution_progress.png
+Saved interactive plot: data/evolution_interactive.html
+Saved evolution data: data/evolution_data.csv
+2025-07-04 01:08:49,945 - __main__ - INFO - Visualizations generated
+2025-07-04 01:08:49,946 - __main__ - INFO - All operations completed successfully!
 ```
 
 ### 🧠 What it means:
 
-- **Epoch 100/100** — Final generation of evolution  
-- **pool=13** — Total number of strategies kept in memory  
-- **new=5** — Newly generated strategies in this epoch  
-- **best=mut_b77fcb30** — Best performing strategy in this round  
-- **checkpoint** — Best mutant was saved for future reuse  
-- **Best strategy** — Final evolved strategy that scored highest  
-- **Features** — List of active features (indicators, parameters)  
-- **Score** — Fitness score based on performance metrics  
+* **Best strategy** — The top-performing strategy from the final generation.
+* **Features** — The active features (indicators, parameters) selected during evolution.
+* **Score** — The internal fitness score for selection.
+* **OOS Sharpe** — Sharpe ratio on out-of-sample data.
+* **OOS Drawdown** — Maximum drawdown on OOS.
+* **Win Rate** — Percent of profitable trades on OOS data.
+* **Trade count** — Total number of trades simulated.
+* **Checkpoints** — Strategies saved at each evolutionary epoch.
+* **Visualizations** — Summary plots and interactive dashboards for review:
 
-You can now take this best strategy and test, visualize, or re-evolve it further.
+  * `evolution_progress.png` — Fitness over time
+  * `operator_impact_rates.png` — Contribution of each mutation operator
+  * `evolution_interactive.html` — Interactive Plotly dashboard
+  * `evolution_data.csv` — Raw data behind the evolution
 
-## 🗂 Project Structure
+> You can now reuse the top strategy, analyze its trades, or re-evolve it with new constraints.
 
-```bash
-mutator-evo/
-├── src/
-│   ├── mutator_evo/
-│   │   ├── core/
-│   │   │   ├── strategy_mutator.py
-│   │   │   ├── strategy_embedding.py
-│   │   │   └── config.py
-│   │   ├── operators/
-│   │   │   ├── interfaces.py
-│   │   │   ├── mutation_impl.py
-│   │   │   └── importance_calculator.py
-│   │   └── scripts/
-│   │       └── run_evolution.py
-│   └── tests/
-│       ├── unit/
-│       └── integration/
-├── data/
-│   ├── market_data/
-│   └── checkpoints/
+
+## 📁 Project Structure Overview
+
+This is a modular, scalable architecture for **Mutator Evo** — a framework for evolving, testing, and deploying algorithmic trading strategies.
+
+```
+.
+├── checkpoints/
 ├── configs/
-│   ├── default.yaml
-│   ├── crypto_config.yaml
-│   └── equity_config.yaml
+├── data/
 ├── docs/
-│   ├── architecture.md
-│   └── user_guide.md
+├── logo/
+├── mutator_evo.egg-info/
+├── src/
+│   └── mutator_evo/
+│       ├── backtest/
+│       ├── core/
+│       ├── operators/
+│       │   ├── shap_importance.py
+│       │   ├── rl_mutation.py
+│       │   └── _uniform_crossover.py
+│       └── scripts/
+├── tests/
+│   ├── integration/
+│   └── unit/
+├── .coverage
+├── pyproject.toml
+├── README.md
 ├── requirements.txt
-├── setup.py
-└── README.md
+└── setup.py
 ```
 
+### 🧠 Core Logic — `src/mutator_evo/`
+
+#### `backtest/`
+
+Modules responsible for backtesting and execution logic:
+
+* `backtrader_adapter.py` — Standard backtesting via Backtrader.
+* `risk_manager.py` — SL/TP logic and position sizing.
+* `vectorized_backtester.py` — Fast, Pandas/Numpy-based backtester.
+
+#### `core/`
+
+Foundational logic and infrastructure:
+
+* `config.py` — Global configuration loader.
+* `logger.py` — Custom logging setup.
+* `strategy_embedding.py` — Encodes strategies as feature vectors.
+* `strategy_mutator.py` — Handles mutation, crossover, and strategy evolution.
+
+### 🔁 Operators — `operators/`
+
+#### Standard Modules:
+
+* `importance_calculator.py` — Scores feature importance.
+* `mutation_impl.py` — Basic mutation implementations.
+* `interfaces.py` — Abstract base classes and mutation APIs.
+
+#### 🧪 Advanced Modules (New):
+
+* `_uniform_crossover.py` — Uniform crossover between parent strategies.
+* `rl_mutation.py` — Reinforcement learning-based mutation selector.
+* `shap_importance.py` — Feature importance via SHAP values.
+
+### 🚀 Scripts — `scripts/`
+
+Ready-to-run utilities:
+
+* `run_evolution.py` — Main evolutionary loop.
+* `deploy_strategy.py` — Exports top strategies for deployment.
+* `visualize_evolution.py` — Plots fitness progress and stats.
+* `visualize_results.py` — OOS performance visualizations and plots.
+
+### 🧩 Other Directories
+
+* `checkpoints/` — Serialized `.pkl` strategy checkpoints per epoch.
+* `configs/` — YAML configuration files by market type.
+* `data/` — Exported CSVs, plots, and visualizations.
+* `docs/` — Markdown documentation for architecture, APIs, and mutation logic.
+* `logo/` — Branding assets like `me.png`, logos, etc.
+* `tests/` — Full unit + integration test suite.
+
+### ⚙️ Build & Environment
+
+* `pyproject.toml` — Modern build config (PEP 518).
+* `setup.py` — Legacy setup script for editable installs.
+* `requirements.txt` — Python dependencies.
+* `.coverage` — Code coverage report.
+* `README.md` — Project overview, usage guide, and example outputs.
 ## 🤝 Contributing
 
 Mutatorevo is still in the experimental phase.  
