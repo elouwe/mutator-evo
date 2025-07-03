@@ -1,72 +1,89 @@
 # src/mutator_evo/core/strategy_embedding.py
 import random
 import uuid
-from dataclasses import dataclass
-from typing import Any, Dict, Callable
+from dataclasses import dataclass, field
+from typing import Any, Dict, Optional
 
 @dataclass
 class StrategyEmbedding:
     name: str
     features: Dict[str, Any]
+    oos_metrics: Optional[Dict[str, float]] = field(default=None)
     
     def __post_init__(self):
-        self._func = self._generate_func()
+        self._cached_score = None
     
     @classmethod
     def create_random(cls, feature_bank: set) -> "StrategyEmbedding":
-        """Create random strategy from feature bank"""
-        num_features = min(5, len(feature_bank))
+        # Create more diverse and aggressive strategies
+        num_features = random.randint(4, min(8, len(feature_bank)))
         selected_features = random.sample(list(feature_bank), num_features)
+        
+        # Create meaningful parameter values
+        features = {}
+        for feat in selected_features:
+            if 'period' in feat:
+                features[feat] = random.randint(5, 25)
+            elif 'trade_size' in feat:
+                features[feat] = random.uniform(0.15, 0.4)
+            elif 'stop_loss' in feat:
+                features[feat] = random.uniform(0.01, 0.04)
+            elif 'take_profit' in feat:
+                features[feat] = random.uniform(0.03, 0.08)
+            else:
+                # 80% chance of true for boolean features
+                features[feat] = random.random() > 0.2
+        
+        # 30% chance to include RL agent
+        if random.random() < 0.3:
+            features["rl_agent"] = {
+                "hidden_layers": [random.randint(64, 256) for _ in range(random.randint(1, 3))],
+                "learning_rate": random.uniform(1e-4, 1e-2),
+                "gamma": random.uniform(0.9, 0.99),
+                "epsilon": random.uniform(0.05, 0.3),
+                "use_attention": random.random() > 0.7,
+                # Weights are not initialized here because they are too big, 
+                # but in a real scenario we might initialize a small network
+            }
+                
         return cls(
             name=f"rand_{uuid.uuid4().hex[:8]}",
-            features={feat: random.uniform(0, 1) for feat in selected_features}
+            features=features
         )
     
-    def _generate_func(self):
-        """Generate strategy function based on features"""
-        def strategy_func(data):
-            # Example strategy logic
-            if self.features.get('use_ema', False) and data.close > data.ema(20):
-                return True  # Buy signal
-            return False
-        return strategy_func
-    
-    @property
-    def func(self) -> Callable:
-        return self._func
-    
     def score(self) -> float:
-        """Strategy score (stub implementation)"""
-        # More realistic dummy score
-        base_score = sum(hash(f) % 100 / 100 for f in self.features) / len(self.features)
-        complexity_penalty = len(self.features) * 0.01
-        return max(0, base_score - complexity_penalty)
-    
-    def estimate_score_without(self, feature: str) -> float:
-        """Estimate score without a specific feature"""
-        if feature not in self.features:
-            return self.score()
+        if self._cached_score is not None:
+            return self._cached_score
             
-        features_without = {k: v for k, v in self.features.items() if k != feature}
-        if not features_without:
-            return 0
+        if self.oos_metrics is None:
+            return 0.5
+        else:
+            # Clip Sharpe values to reasonable range
+            sharpe = self.oos_metrics.get("oos_sharpe", 0)
+            sharpe = max(min(sharpe, 10), -10)
             
-        base_score = sum(hash(f) % 100 / 100 for f in features_without) / len(features_without)
-        complexity_penalty = (len(features_without)) * 0.01
-        return max(0, base_score - complexity_penalty)
+            penalty = self.oos_metrics.get("overfitting_penalty", 0)
+            
+            # Include trade count in score
+            trade_count = self.oos_metrics.get("trade_count", 0)
+            trade_bonus = min(trade_count / 50, 2.0)
+            
+            # Safe calculation with constraints
+            raw_score = sharpe - penalty + trade_bonus
+            self._cached_score = max(-10.0, min(raw_score, 10.0))
+        return self._cached_score
     
     def __repr__(self) -> str:
-        return f"Strategy(name={self.name}, features={len(self.features)})"
+        return f"Strategy(name={self.name}, features={list(self.features.keys())}, score={self.score():.2f})"
     
-    # Serialization methods
     def __getstate__(self):
         state = self.__dict__.copy()
-        # Don't serialize function
-        if '_func' in state:
-            del state['_func']
+        state['_cached_score'] = None
         return state
     
     def __setstate__(self, state):
         self.__dict__.update(state)
-        # Regenerate function after deserialization
-        self._func = self._generate_func()
+        if not hasattr(self, '_cached_score'):
+            self._cached_score = None
+        if not hasattr(self, 'oos_metrics'):
+            self.oos_metrics = None

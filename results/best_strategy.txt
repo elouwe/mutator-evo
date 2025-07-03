@@ -1,0 +1,23 @@
+Name: mut_5bd2a890
+Score: 10.00
+OOS Sharpe: 23.97
+OOS Drawdown: 8.15%
+OOS Win Rate: 0.39
+Trade count: 359
+
+Features:
+  ema_period: 5.849199698060607
+  bollinger_period: 16
+  stop_loss: 0.016126627915776598
+  use_stoch: True
+  macd_slow: True
+  rsi_period: 17
+  rl_agent: True
+  stoch_k: True
+  stoch_d: True
+  use_rsi: True
+  sma_period: 13
+  take_profit: 0.04631786627308096
+  use_sma: True
+  trade_size: 0.38005064418933443
+  adx_period: 13
