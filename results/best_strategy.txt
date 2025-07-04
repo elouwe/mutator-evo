@@ -1,23 +1,26 @@
-Name: mut_5bd2a890
+Name: mut_213daa03
 Score: 10.00
-OOS Sharpe: 23.97
-OOS Drawdown: 8.15%
-OOS Win Rate: 0.39
-Trade count: 359
+OOS Sharpe: 8.24
+OOS Drawdown: 3.74%
+OOS Win Rate: 0.47
+Trade count: 346
 
 Features:
-  ema_period: 5.849199698060607
-  bollinger_period: 16
-  stop_loss: 0.016126627915776598
-  use_stoch: True
-  macd_slow: True
-  rsi_period: 17
-  rl_agent: True
-  stoch_k: True
-  stoch_d: True
-  use_rsi: True
-  sma_period: 13
-  take_profit: 0.04631786627308096
+  sma_period: 11
   use_sma: True
-  trade_size: 0.38005064418933443
-  adx_period: 13
+  ema_period: 11
+  macd_fast: True
+  rsi_period: 13
+  use_rsi: False
+  rl_agent: {'hidden_layers': [235, 134, 232], 'learning_rate': 0.003615155971910608, 'gamma': 1.1784392967509865, 'epsilon': 0.2614213591415829, 'use_attention': False, 'weights': None}
+  stop_loss: 0.030657442461351735
+  use_bollinger: True
+  use_stoch: True
+  trade_size: 0.2325982003952747
+  bollinger_period: 25
+  macd_signal: True
+  stoch_d: True
+  adx_period: 17
+  stoch_k: True
+  take_profit: 0.03963828624402362
+  use_macd: False

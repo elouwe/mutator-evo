@@ -23,53 +23,61 @@ class ShapFeatureImportanceCalculator:
         ])
     
     def compute(self, top_strats: List[StrategyEmbedding]) -> Dict[str, float]:
+        """Calculate feature importance using SHAP values.
+        
+        Args:
+            top_strats: List of top strategies to analyze
+            
+        Returns:
+            Dictionary mapping feature names to their normalized importance scores (0-1)
+        """
         if not top_strats or len(top_strats) < 5:
             return {}
         
-        # Собираем все возможные признаки
+        # Collect all possible features
         all_features = set()
         for s in top_strats:
             all_features.update(s.features.keys())
         all_features = sorted(all_features)
         
-        # Создаем матрицу признаков и целевую переменную
+        # Create feature matrix and target variable
         X = []
         y = []
         for s in top_strats:
             row = []
             for feat in all_features:
                 value = s.features.get(feat)
-                # Преобразуем булевы значения в числовые
+                # Convert boolean values to numeric
                 if isinstance(value, bool):
                     row.append(1 if value else 0)
                 elif value is None:
-                    row.append(0)  # Заполняем отсутствующие признаки нулями
+                    row.append(0)  # Fill missing features with zeros
                 else:
                     row.append(float(value))
             X.append(row)
             y.append(s.score())
         
-        # Преобразуем в numpy массивы
+        # Convert to numpy arrays
         X = np.array(X)
         y = np.array(y)
         
-        # Предобработка данных
+        # Preprocess data
         X_processed = self.preprocessor.fit_transform(X)
         
-        # Обучаем модель
+        # Train model
         self.model.fit(X_processed, y)
         
-        # Вычисляем SHAP значения
+        # Calculate SHAP values
         explainer = shap.Explainer(self.model)
         shap_values = explainer(X_processed)
         
-        # Усредняем абсолютные значения SHAP для каждого признака
+        # Average absolute SHAP values for each feature
         feature_importances = np.abs(shap_values.values).mean(axis=0)
         
-        # Создаем словарь важности признаков
+        # Create feature importance dictionary
         importance_dict = dict(zip(all_features, feature_importances))
         
-        # Нормализуем важности от 0 до 1
+        # Normalize importances to 0-1 range
         max_importance = max(importance_dict.values()) or 1
         normalized_importance = {
             k: v / max_importance 

@@ -42,8 +42,7 @@ class StrategyEmbedding:
                 "gamma": random.uniform(0.9, 0.99),
                 "epsilon": random.uniform(0.05, 0.3),
                 "use_attention": random.random() > 0.7,
-                # Weights are not initialized here because they are too big, 
-                # but in a real scenario we might initialize a small network
+                "weights": None  
             }
                 
         return cls(

@@ -8,12 +8,16 @@ import uuid
 import datetime
 import logging
 import numpy as np
+import ray
 from collections import deque, defaultdict
 from datetime import date
 from typing import Any, Dict, List, Set, Optional, Tuple
+import pandas as pd
+import backtrader as bt
 
 from .config import DynamicConfig
 from .strategy_embedding import StrategyEmbedding
+from .ray_pool import RayPool
 from ..operators.interfaces import IMutationOperator, IFeatureImportanceCalculator
 from ..operators.mutation_impl import (
     DropMutation, AddMutation, ShiftMutation, 
@@ -24,13 +28,13 @@ from ..operators.importance_calculator import (
     HybridFeatureImportanceCalculator
 )
 
-# Импорт новых операторов с обработкой ошибок
+# Import new operators with error handling
 try:
     from ..operators._uniform_crossover import UniformCrossover
     from ..operators.rl_mutation import RLMutation
 except ImportError as e:
     print(f"Warning: Could not import new operators: {e}")
-    # Создаем заглушки для операторов
+    # Create stubs for operators
     class UniformCrossover:
         def apply(self, features, config, feature_bank, importance):
             return features
@@ -65,6 +69,7 @@ class StrategyMutatorV2:
         self.rng.seed(42)
         self.importance: Dict[str, float] = {}
         self.backtest_adapter = backtest_adapter
+        self.use_ray = True  # Use Ray by default
         
         # Track operator usage for current generation
         self.operator_usage = []
@@ -93,7 +98,7 @@ class StrategyMutatorV2:
             "RLMutation": "rl_mutation"
         }
         
-        # Выбираем калькулятор важности признаков
+        # Select feature importance calculator
         if self.use_shap:
             self.importance_calculator = HybridFeatureImportanceCalculator()
         else:
@@ -184,26 +189,59 @@ class StrategyMutatorV2:
                     self.config.update_operator_stats(op_name, impact)
                     del self.pending_evaluation[mutant_name]
             
-            # Step 2: Backtest new strategies
+            # Step 2: Backtest new strategies in parallel
             new_strategies = [s for s in self.strategy_pool if s.oos_metrics is None]
             if new_strategies and self.backtest_adapter:
                 logger.info(f"Backtesting {len(new_strategies)} strategies...")
-                for strategy in new_strategies:
-                    try:
-                        results = self.backtest_adapter.evaluate(strategy)
-                        strategy.oos_metrics = results
-                        logger.info(f"  {strategy.name}: score={strategy.score():.2f}, trades={results.get('trade_count', 0)}")
-                    except Exception as e:
-                        logger.error(f"Backtest failed for {strategy.name}: {str(e)}")
-                        strategy.oos_metrics = {
-                            "oos_sharpe": -5.0,
-                            "oos_max_drawdown": 100.0,
-                            "oos_win_rate": 0.0,
-                            "overfitting_penalty": 1.0,
-                            "trade_count": 0
-                        }
-                        strategy._cached_score = -5.0
-            
+                
+                # Get market data (copy) to pass to static method
+                market_data = self.backtest_adapter.original_df
+                
+                # Use Ray for parallel execution if enabled
+                if self.use_ray:
+                    logger.info("Using Ray for parallel backtesting")
+                    # Group strategies into batches for load balancing
+                    batch_size = max(4, len(new_strategies) // 4)
+                    batches = [new_strategies[i:i + batch_size] 
+                              for i in range(0, len(new_strategies), batch_size)]
+                    
+                    with RayPool().pool() as pool:
+                        for batch in batches:
+                            # Create tasks for evaluation
+                            futures = []
+                            for strategy in batch:
+                                # Use static method and pass strategy and data
+                                future = pool.submit(
+                                    StrategyMutatorV2.evaluate_strategy_wrapper,
+                                    (strategy, market_data)  # Pass as single tuple
+                                )
+                                futures.append((strategy, future))
+                            
+                            # Process results
+                            for strategy, future in futures:
+                                try:
+                                    result = ray.get(future)  # Wait for result
+                                    strategy.oos_metrics = result
+                                    logger.info(f"Evaluated {strategy.name}: "
+                                              f"score={strategy.score():.2f}, "
+                                              f"trades={result.get('trade_count', 0)}")
+                                except Exception as e:
+                                    logger.error(f"Failed to evaluate {strategy.name}: {str(e)}")
+                                    strategy.oos_metrics = self._default_metrics()
+                else:
+                    # Local execution without Ray
+                    logger.info("Using local sequential backtesting")
+                    for strategy in new_strategies:
+                        try:
+                            result = StrategyMutatorV2.evaluate_strategy_wrapper((strategy, market_data))
+                            strategy.oos_metrics = result
+                            logger.info(f"Evaluated {strategy.name}: "
+                                      f"score={strategy.score():.2f}, "
+                                      f"trades={result.get('trade_count', 0)}")
+                        except Exception as e:
+                            logger.error(f"Failed to evaluate {strategy.name}: {str(e)}")
+                            strategy.oos_metrics = self._default_metrics()
+
             # Step 3: Sort and select top strategies
             self.strategy_pool.sort(key=lambda s: s.score(), reverse=True)
             
@@ -304,12 +342,45 @@ class StrategyMutatorV2:
             self._reinitialize_pool()
 
     def _reinitialize_pool(self):
-        logger.info("[mutator] Reinitializing strategy pool")
+        logger.info("[mutator] Reinitializing strategy pool with 50 strategies")
         self.strategy_pool = [
             StrategyEmbedding.create_random(self.feature_bank)
-            for _ in range(30)  # Larger initial pool
+            for _ in range(50)  # Increased from 30 to 50
         ]
         self.pending_evaluation = {}
+    
+    @staticmethod
+    def evaluate_strategy_wrapper(args: Tuple[StrategyEmbedding, pd.DataFrame]) -> Dict[str, float]:
+        """Wrapper for strategy evaluation that can be called via Ray"""
+        strategy, market_data = args
+        try:
+            # Create temporary adapter for evaluation
+            from mutator_evo.backtest.backtrader_adapter import BacktraderAdapter
+            data_feed = bt.feeds.PandasData(dataname=market_data)
+            adapter = BacktraderAdapter(data_feed)
+            return adapter.evaluate(strategy)
+        except Exception as e:
+            import logging
+            import traceback
+            logger = logging.getLogger(__name__)
+            logger.error(f"Backtest failed for {strategy.name}: {str(e)}")
+            logger.error(traceback.format_exc())  # Add traceback
+            return {
+                "oos_sharpe": -5.0,
+                "oos_max_drawdown": 100.0,
+                "oos_win_rate": 0.0,
+                "overfitting_penalty": 1.0,
+                "trade_count": 0
+            }
+    
+    def _default_metrics(self):
+        return {
+            "oos_sharpe": -5.0,
+            "oos_max_drawdown": 100.0,
+            "oos_win_rate": 0.0,
+            "overfitting_penalty": 1.0,
+            "trade_count": 0
+        }
 
     def save_checkpoint(self, path: Optional[str] = None) -> None:
         try:

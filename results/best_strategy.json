@@ -1,0 +1,45 @@
+{
+  "name": "mut_213daa03",
+  "features": {
+    "sma_period": 11,
+    "use_sma": true,
+    "ema_period": 11,
+    "macd_fast": true,
+    "rsi_period": 13,
+    "use_rsi": false,
+    "rl_agent": {
+      "hidden_layers": [
+        235,
+        134,
+        232
+      ],
+      "learning_rate": 0.003615155971910608,
+      "gamma": 1.1784392967509865,
+      "epsilon": 0.2614213591415829,
+      "use_attention": false,
+      "weights": null
+    },
+    "stop_loss": 0.030657442461351735,
+    "use_bollinger": true,
+    "use_stoch": true,
+    "trade_size": 0.2325982003952747,
+    "bollinger_period": 25,
+    "macd_signal": true,
+    "stoch_d": true,
+    "adx_period": 17,
+    "stoch_k": true,
+    "take_profit": 0.03963828624402362,
+    "use_macd": false
+  },
+  "score": 10.0,
+  "metrics": {
+    "is_sharpe": 0.7502403632452724,
+    "is_max_drawdown": 6.821760257201979,
+    "is_win_rate": 0.5030674846625767,
+    "oos_sharpe": 8.235933781134941,
+    "oos_max_drawdown": 3.736547921003399,
+    "oos_win_rate": 0.47368421052631576,
+    "overfitting_penalty": 0.002938327413626091,
+    "trade_count": 346
+  }
+}

@@ -2,25 +2,25 @@
 import backtrader as bt
 import numpy as np
 import pandas as pd
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Any
 import traceback
 import math
 import random
+import logging
 
-# ------------------------------------------------------------
-#                   ADAPTER
-# ------------------------------------------------------------
+logger = logging.getLogger(__name__)
+
 class BacktraderAdapter:
     """
-    - Divides dataset 70 / 30 (IS / OOS)
-    - Cleans NaN / ±∞
-    - Counts metrics + retraining penalty
-    - Falls only in really-hard-case
+    - Divides dataset 70/30 (IS/OOS)
+    - Cleans NaN/±∞ values
+    - Calculates metrics + overfitting penalty
+    - Fails only in extreme cases
     """
 
     # ---------- INIT ----------
     def __init__(self, full_data_feed: bt.feeds.PandasData):
-        self.original_df: pd.DataFrame = (
+        self._original_df: pd.DataFrame = (
             full_data_feed.params.dataname
             .copy()
             .replace([np.inf, -np.inf], np.nan)
@@ -29,23 +29,25 @@ class BacktraderAdapter:
         )
         
         # Ensure no zero or negative prices
-        self.original_df = self.original_df[self.original_df["close"] > 0.001]
-        self.original_df["volume"] = self.original_df["volume"].replace(0, 1)  # Avoid zero volume
+        self._original_df = self._original_df[self._original_df["close"] > 0.001]
+        self._original_df["volume"] = self._original_df["volume"].replace(0, 1)  # Avoid zero volume
 
         req = {"open", "high", "low", "close", "volume"}
-        if not req.issubset(map(str.lower, self.original_df.columns)):
+        if not req.issubset(map(str.lower, self._original_df.columns)):
             raise ValueError(f"Dataset must contain columns {req}")
 
-    # ---------- PUBLIC ----------
+    # ---------- PUBLIC METHODS ----------
     def evaluate(self, emb) -> Dict[str, float]:
         try:
             is_data, oos_data = self._split_data()
         except Exception as e:
-            print(f"Split fail: {e}")
+            logger.error(f"Data split failed: {e}")
             return self._default_results()
 
+        # Run backtests sequentially instead of parallel
         is_res = self._safe_backtest(emb, is_data, "IS")
         oos_res = self._safe_backtest(emb, oos_data, "OOS")
+        
         pen = self._penalty(is_res, oos_res)
 
         return {
@@ -58,19 +60,24 @@ class BacktraderAdapter:
             "overfitting_penalty": pen,
             "trade_count": is_res["trade_count"] + oos_res["trade_count"],
         }
+    
+    @property
+    def original_df(self) -> pd.DataFrame:
+        """Returns a copy of the original data for passing to worker processes"""
+        return self._original_df.copy()
 
     # ------------------------------------------------------------
-    #                INTERNALS
+    #                INTERNAL METHODS
     # ------------------------------------------------------------
     def _split_data(self) -> Tuple[bt.DataBase, bt.DataBase]:
-        split = int(len(self.original_df) * 0.7)
+        split = int(len(self._original_df) * 0.7)
         df_is = (
-            self.original_df.iloc[:split]
+            self._original_df.iloc[:split]
             .dropna(subset=["open", "high", "low", "close", "volume"])
             .copy()
         )
         df_oos = (
-            self.original_df.iloc[split:]
+            self._original_df.iloc[split:]
             .dropna(subset=["open", "high", "low", "close", "volume"])
             .copy()
         )
@@ -100,15 +107,15 @@ class BacktraderAdapter:
         try:
             return self._run_backtest(emb, feed)
         except Exception as e:
-            print(f"{tag} backtest failed: {e}")
-            traceback.print_exc()
+            logger.error(f"{tag} backtest failed: {e}")
+            logger.error(traceback.format_exc())
             return self._default_metrics()
 
     # ------------------------------------------------------------
     #               BACKTEST CORE
     # ------------------------------------------------------------
     def _run_backtest(self, emb, feed):
-        # ------ SAFE ADX (no /0) ------
+        # ------ SAFE ADX (avoid /0) ------
         class SafeADX(bt.Indicator):
             lines = ("adx",)
             params = (("period", 14),)
@@ -133,7 +140,7 @@ class BacktraderAdapter:
                     abs(self.data.low[0] - self.data.close[-1]),
                 )
 
-                # Avoid /0
+                # Avoid division by zero
                 if tr == 0:
                     self.lines.adx[0] = 0
                     return
@@ -144,7 +151,7 @@ class BacktraderAdapter:
 
                 dx = 0 if denom == 0 else abs(plus_di - minus_di) / denom * 100
 
-                # Smooth like classic Wilder's but very simplified
+                # Smoothing similar to Wilder's but simplified
                 prev = self.lines.adx[-1] if len(self.lines.adx) > 0 else dx
                 self.lines.adx[0] = (prev * (self.p.period - 1) + dx) / self.p.period
 
@@ -218,7 +225,7 @@ class BacktraderAdapter:
                 self.lines.percD = bt.ind.SMA(self.percK, period=self.p.period_dfast)
                 self.lines.percK = self.percK
 
-        # ------ STRATEGY ------
+        # ------ STRATEGY CLASS ------
         class SafeStrategy(bt.Strategy):
             params = (("features", emb.features),)
 
@@ -310,7 +317,7 @@ class BacktraderAdapter:
                 else:
                     self.rl_agent = None
 
-            # ----- getters -----
+            # ----- Helper methods -----
             def _get_i(self, k, d):
                 try:
                     v = int(self.p.features.get(k, d))
@@ -326,19 +333,18 @@ class BacktraderAdapter:
                     return d
 
             def _init_rl_agent(self, config):
-                # This is a placeholder. In a real implementation, we would initialize a neural network.
-                # For now, we just store the config and simulate random actions.
+                # Placeholder for RL agent initialization
                 return {
                     "config": config,
                     "model": None  # Simulated model
                 }
 
             def _rl_predict(self, state):
-                # Placeholder: returns a random action: -1, 0, or 1
+                # Placeholder: returns random action (-1, 0, 1)
                 return random.randint(-1, 1)
 
             def _get_rl_state(self):
-                # Create a state vector from the current market data and indicators
+                # Create state vector from market data and indicators
                 state = []
                 # Add price change
                 if len(self.data.close) > 1:
@@ -361,7 +367,7 @@ class BacktraderAdapter:
 
                 return state
 
-            # ----- VALIDITY -----
+            # ----- Data validation -----
             def _data_ok(self):
                 l = self.data
                 return (
@@ -377,7 +383,7 @@ class BacktraderAdapter:
                     return all(getattr(ind.lines, n)[0] is not None for n in ind.lines._getlines())
                 return ind[0] is not None
 
-            # ----- MAIN LOOP -----
+            # ----- MAIN TRADING LOGIC -----
             def next(self):
                 for o in self.orders:
                     self.cancel(o)
@@ -388,7 +394,7 @@ class BacktraderAdapter:
                 if any(not self._ind_ready(i) for i in self.ind.values()):
                     return
 
-                s = []
+                s = []  # Signal strength components
 
                 if "ema" in self.ind:
                     s.append(1 if self.data.close[0] > self.ind["ema"][0] else -1)
@@ -419,7 +425,7 @@ class BacktraderAdapter:
                         s.append(-1)
 
                 if "adx" in self.ind and self.ind["adx"][0] > 25:
-                    s = [x * 2 for x in s]
+                    s = [x * 2 for x in s]  # Amplify signals in trending markets
 
                 if "obv" in self.ind and len(self.ind["obv"]) > 1:
                     obv = self.ind["obv"]
@@ -465,7 +471,7 @@ class BacktraderAdapter:
                         self.cancel(o)
                     self.orders.clear()
 
-        # ------ CEREBRO ------
+        # ------ SETUP CEREBRO ENGINE ------
         cerebro = bt.Cerebro()
         cerebro.adddata(feed)
         cerebro.addstrategy(SafeStrategy)
@@ -481,28 +487,46 @@ class BacktraderAdapter:
             # Run without vectorization to avoid division errors
             strat = cerebro.run(stdstats=False, runonce=False)[0]  # type: ignore
         except Exception as e:
-            print(f"Backtest error: {e}")
-            traceback.print_exc()
+            logger.error(f"Backtest error: {e}")
+            logger.error(traceback.format_exc())
             return self._default_metrics()
 
-        # ------ METRICS ------
-        # Handle trade analysis safely
+        # ------ METRICS CALCULATION ------
+        total_trades = 0
+        won_trades = 0
+        win_rate = 0.0
+        
         try:
             trade_analysis = strat.analyzers.trades.get_analysis()
-            total_trades = trade_analysis.total.total
-            won_trades = trade_analysis.won.total
-            win_rate = won_trades / total_trades if total_trades > 0 else 0.0
-        except (AttributeError, KeyError, ZeroDivisionError, TypeError):
+            
+            # Improved result handling
+            if 'total' in trade_analysis:
+                total_trades = trade_analysis['total'].total
+                
+            if 'won' in trade_analysis:
+                won_trades = trade_analysis['won'].total
+                
+            if total_trades > 0:
+                win_rate = won_trades / total_trades
+            else:
+                win_rate = 0.0
+                
+        except (AttributeError, KeyError, TypeError) as e:
+            logger.error(f"Trade analysis error: {e}")
+            # Fallback to strategy's trade count
+            total_trades = strat.trade_count
             win_rate = 0.0
 
         try:
             sharpe = strat.analyzers.sharpe.get_analysis().get("sharperatio", 0.0) or 0.0
-        except (AttributeError, KeyError):
+        except (AttributeError, KeyError) as e:
+            logger.error(f"Sharpe calculation error: {e}")
             sharpe = 0.0
             
         try:
             max_drawdown = strat.analyzers.drawdown.get_analysis().get("max", {}).get("drawdown", 100.0)
-        except (AttributeError, KeyError):
+        except (AttributeError, KeyError) as e:
+            logger.error(f"Drawdown calculation error: {e}")
             max_drawdown = 100.0
 
         return {
@@ -512,7 +536,7 @@ class BacktraderAdapter:
             "trade_count": strat.trade_count,
         }
 
-    # ---------- HELPERS ----------
+    # ---------- HELPER METHODS ----------
     @staticmethod
     def _default_metrics():
         return dict(sharpe=0.0, max_drawdown=100.0, win_rate=0.0, trade_count=0)
@@ -537,5 +561,6 @@ class BacktraderAdapter:
             dd = max(0, oos_r["max_drawdown"] - is_r["max_drawdown"])
             wr = max(0, is_r["win_rate"] - oos_r["win_rate"])
             return min(0.6 * s + 0.3 * dd + 0.1 * wr, 1.0)
-        except Exception:
+        except Exception as e:
+            logger.error(f"Penalty calculation error: {e}")
             return 1.0

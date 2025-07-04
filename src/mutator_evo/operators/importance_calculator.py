@@ -58,13 +58,13 @@ class ShapFeatureImportanceCalculator:
         if not top_strats or len(top_strats) < 5:
             return {}
         
-        # Собираем все возможные признаки
+        # Collect all possible features
         all_features = set()
         for s in top_strats:
             all_features.update(s.features.keys())
         all_features = sorted(all_features)
         
-        # Создаем матрицу признаков и целевую переменную
+        # Create feature matrix and target variable
         X = []
         y = []
         for s in top_strats:
@@ -72,10 +72,17 @@ class ShapFeatureImportanceCalculator:
             for feat in all_features:
                 value = s.features.get(feat)
                 
-                # Обработка сложных признаков (например, rl_agent)
-                if isinstance(value, dict):
-                    # Для словарных признаков используем бинарный флаг
-                    row.append(1)
+                # Специальная обработка для RL-агентов
+                if feat == "rl_agent":
+                    if isinstance(value, dict):
+                        # Преобразуем конфиг RL в числовое представление
+                        rl_value = 1
+                        if "hidden_layers" in value:
+                            rl_value += len(value["hidden_layers"]) * 0.1
+                    else:
+                        rl_value = 0
+                    row.append(rl_value)
+                # Обработка других признаков
                 elif isinstance(value, bool):
                     row.append(1 if value else 0)
                 elif value is None:
@@ -88,36 +95,36 @@ class ShapFeatureImportanceCalculator:
             X.append(row)
             y.append(s.score())
         
-        # Преобразуем в numpy массивы
+        # Convert to numpy arrays
         X = np.array(X)
         y = np.array(y)
         
-        # Предобработка данных
+        # Preprocess data
         try:
             X_processed = self.preprocessor.fit_transform(X)
         except Exception as e:
             print(f"Data preprocessing error: {str(e)}")
             return {}
         
-        # Обучаем модель
+        # Train model
         try:
             self.model.fit(X_processed, y)
         except Exception as e:
             print(f"Model training error: {str(e)}")
             return {}
         
-        # Вычисляем SHAP значения
+        # Calculate SHAP values
         try:
             explainer = shap.Explainer(self.model)
             shap_values = explainer(X_processed)
             
-            # Усредняем абсолютные значения SHAP для каждого признака
+            # Average absolute SHAP values for each feature
             feature_importances = np.abs(shap_values.values).mean(axis=0)
             
-            # Создаем словарь важности признаков
+            # Create feature importance dictionary
             importance_dict = dict(zip(all_features, feature_importances))
             
-            # Нормализуем важности от 0 до 1
+            # Normalize importances to 0-1 range
             max_importance = max(importance_dict.values()) or 1
             normalized_importance = {
                 k: v / max_importance 
@@ -130,24 +137,24 @@ class ShapFeatureImportanceCalculator:
             return {}
 
 class HybridFeatureImportanceCalculator:
-    """Комбинирует SHAP и стандартный метод расчета важности"""
+    """Combines SHAP and default importance calculation methods"""
     def __init__(self, shap_weight=0.7):
         self.shap_weight = shap_weight
         self.default_calculator = DefaultFeatureImportanceCalculator()
         self.shap_calculator = ShapFeatureImportanceCalculator()
     
     def compute(self, top_strats: List) -> Dict[str, float]:
-        # Стандартный метод
+        # Default method
         default_importance = self.default_calculator.compute(top_strats)
         
-        # SHAP метод
+        # SHAP method
         shap_importance = self.shap_calculator.compute(top_strats)
         
-        # Если SHAP не сработал, используем только стандартный метод
+        # If SHAP failed, use only default method
         if not shap_importance:
             return default_importance
         
-        # Комбинируем результаты
+        # Combine results
         combined = {}
         all_features = set(default_importance.keys()) | set(shap_importance.keys())
         

@@ -128,14 +128,14 @@ class DynamicConfig:
         
         logger.debug("\nAdapting mutation probabilities:")
         
-        # Собираем все средние воздействия
+        # Collect all average impacts
         avg_impacts = []
         for stats in self.operator_stats.values():
             if stats['n'] > 0:
                 avg_impact = stats['total_impact'] / stats['n']
                 avg_impacts.append(avg_impact)
         
-        # Вычисляем min/max impact только если есть данные
+        # Calculate min/max impact only if we have data
         if avg_impacts:
             min_impact = min(avg_impacts)
             max_impact = max(avg_impacts)
@@ -147,18 +147,18 @@ class DynamicConfig:
             if stats['n'] < 3:
                 continue
                 
-            # Рассчитываем нормализованное воздействие
+            # Calculate normalized impact
             avg_impact = stats['total_impact'] / stats['n']
             normalized_impact = (avg_impact - min_impact) / (max_impact - min_impact + 1e-8)
                 
-            # Новая вероятность = базовая + масштабированное воздействие
+            # New probability = base + scaled impact
             new_prob = BASE_PROB + 0.6 * normalized_impact
             new_prob = min(MAX_PROB, new_prob)
             
-            # Применяем только к операторам из mutation_probs
+            # Apply only to operators in mutation_probs
             if op_short in self._params["mutation_probs"]:
                 current_prob = self._params["mutation_probs"][op_short]
-                # Плавное обновление
+                # Smooth update
                 smoothed_prob = 0.7 * current_prob + 0.3 * new_prob
                 self._params["mutation_probs"][op_short] = smoothed_prob
                 logger.debug(f"  {op_short}: impact={avg_impact:.3f} prob: {current_prob:.2f} -> {smoothed_prob:.2f}")

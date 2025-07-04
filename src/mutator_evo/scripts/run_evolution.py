@@ -8,17 +8,19 @@ import backtrader as bt
 import traceback
 import logging
 import datetime
+import json
 from pathlib import Path
+import ray
 
-# Добавим путь к корню проекта
+# Add project root to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
-# Теперь импортируем наши модули
+# Now import our modules
 from mutator_evo.core.strategy_mutator import StrategyMutatorV2
 from mutator_evo.core.strategy_embedding import StrategyEmbedding
 from mutator_evo.backtest.backtrader_adapter import BacktraderAdapter
 
-# Настройка логирования
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -113,7 +115,7 @@ def initialize_mutator(data_feed) -> StrategyMutatorV2:
     adapter = BacktraderAdapter(full_data_feed=data_feed)
     return StrategyMutatorV2(
         backtest_adapter=adapter,
-        use_shap=True,  # Включить SHAP-based feature importance
+        use_shap=True,  # Enable SHAP-based feature importance
         top_k=15,  # Keep more top strategies
         n_mutants=15,  # Generate more mutants
         max_age=8,  # Faster rotation
@@ -169,7 +171,7 @@ def run_evolution(mutator: StrategyMutatorV2, epochs: int = 100):
             # Reset pool with more strategies
             mutator.strategy_pool = [
                 StrategyEmbedding.create_random(mutator.feature_bank)
-                for _ in range(25)
+                for _ in range(50)  # Increased from 25 to 50
             ]
             mutator.pending_evaluation = {}
             
@@ -196,7 +198,50 @@ def generate_visualizations():
         logger.error(traceback.format_exc())
 
 def main():
+    ray_initialized = False
+    use_ray = True  # Flag for using Ray
+    
     try:
+        # Check Ray availability
+        try:
+            import ray
+            from ray._private import services
+            logger.info(f"Ray version: {ray.__version__}")
+            logger.info("Ray is available, will use distributed computing")
+        except ImportError:
+            logger.warning("Ray not installed, falling back to local execution")
+            use_ray = False
+            
+        if use_ray:
+            # Ray initialization parameters to avoid port conflicts
+            init_args = {
+                "num_cpus": 4,
+                "ignore_reinit_error": True,
+                "logging_level": logging.WARNING,
+                "object_store_memory": 2 * 10**9,
+                "_system_config": {
+                    "max_direct_call_object_size": 10**6,
+                    "port_retries": 100,  # Increase retry count
+                    "gcs_server_request_timeout_seconds": 30,  # Increase timeout
+                    "gcs_rpc_server_reconnect_timeout_s": 30,  # Reconnect timeout
+                },
+                "include_dashboard": False,  # Disable dashboard
+                "dashboard_host": "127.0.0.1",  # Use local host
+                "dashboard_port": None  # Don't use fixed port
+            }
+            
+            # Initialize Ray
+            try:
+                ray.init(**init_args)
+                ray_initialized = True
+                logger.info("Ray initialized for distributed computing")
+            except Exception as e:
+                logger.error(f"Ray initialization failed: {str(e)}")
+                logger.info("Falling back to local execution")
+                use_ray = False
+        else:
+            logger.info("Using local execution without Ray")
+        
         # Create results directory
         results_dir = Path("results")
         results_dir.mkdir(exist_ok=True)
@@ -208,6 +253,9 @@ def main():
         logger.info("Initializing mutator...")
         mutator = initialize_mutator(data_feed)
         initialize_feature_bank(mutator)
+        
+        # Pass use_ray flag to mutator for use in evolve()
+        mutator.use_ray = use_ray
         
         logger.info("Creating initial pool of 30 random strategies...")
         mutator.strategy_pool = [
@@ -224,23 +272,33 @@ def main():
             logger.info(f"Best strategy: {best.name}")
             logger.info(f"Features: {list(best.features.keys())}")
             logger.info(f"Score: {best.score():.2f}")
+            
+            # Detailed metrics logging
             if best.oos_metrics:
-                logger.info(f"OOS Sharpe: {best.oos_metrics.get('oos_sharpe', 0):.2f}")
-                logger.info(f"OOS Drawdown: {best.oos_metrics.get('oos_max_drawdown', 0):.2f}%")
-                logger.info(f"OOS Win Rate: {best.oos_metrics.get('oos_win_rate', 0):.2f}")
-                logger.info(f"Trade count: {best.oos_metrics.get('trade_count', 0)}")
-                
-                # Save best strategy details
-                with open("best_strategy.txt", "w") as f:
-                    f.write(f"Name: {best.name}\n")
-                    f.write(f"Score: {best.score():.2f}\n")
-                    f.write(f"OOS Sharpe: {best.oos_metrics.get('oos_sharpe', 0):.2f}\n")
-                    f.write(f"OOS Drawdown: {best.oos_metrics.get('oos_max_drawdown', 0):.2f}%\n")
-                    f.write(f"OOS Win Rate: {best.oos_metrics.get('oos_win_rate', 0):.2f}\n")
-                    f.write(f"Trade count: {best.oos_metrics.get('trade_count', 0)}\n")
-                    f.write("\nFeatures:\n")
-                    for k, v in best.features.items():
-                        f.write(f"  {k}: {v}\n")
+                logger.info("Metrics details:")
+                for metric, value in best.oos_metrics.items():
+                    logger.info(f"  {metric}: {value}")
+            
+            # Save best strategy details
+            with open("best_strategy.txt", "w") as f:
+                f.write(f"Name: {best.name}\n")
+                f.write(f"Score: {best.score():.2f}\n")
+                f.write(f"OOS Sharpe: {best.oos_metrics.get('oos_sharpe', 0):.2f}\n")
+                f.write(f"OOS Drawdown: {best.oos_metrics.get('oos_max_drawdown', 0):.2f}%\n")
+                f.write(f"OOS Win Rate: {best.oos_metrics.get('oos_win_rate', 0):.2f}\n")
+                f.write(f"Trade count: {best.oos_metrics.get('trade_count', 0)}\n")
+                f.write("\nFeatures:\n")
+                for k, v in best.features.items():
+                    f.write(f"  {k}: {v}\n")
+            
+            # Save as JSON for further analysis
+            with open("best_strategy.json", "w") as f:
+                json.dump({
+                    "name": best.name,
+                    "features": best.features,
+                    "score": best.score(),
+                    "metrics": best.oos_metrics
+                }, f, indent=2)
         else:
             logger.warning("No strategies in pool after evolution")
         
@@ -256,8 +314,11 @@ def main():
             generate_visualizations()
         except:
             logger.error("Failed to generate visualizations after error")
-        finally:
-            logger.info("Program terminated due to error")
+    finally:
+        if ray_initialized:
+            ray.shutdown()
+            logger.info("Ray resources released")
+        logger.info("Program terminated")
 
 if __name__ == "__main__":
     main()
