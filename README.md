@@ -67,7 +67,7 @@ You provide initial strategies — Mutatorevo mutates, crosses, filters, and ret
    - 4 computers: 40 tasks/hour (teamwork!)  
    - Tested: Handles 4x more work without breaking  
 
-**How We Tested It:**  
+**How i Tested It:**  
 - Crunched data → squeezed it → unpacked → compared: 100% match  
 - Asked the same question repeatedly: Answers instantly after first time  
 - Gave it more and more work: No crashes, just gets faster  
