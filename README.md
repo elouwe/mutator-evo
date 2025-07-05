@@ -135,6 +135,14 @@ Clone the repo and install dependencies:
 ```bash
 git clone https://github.com/elouwe/mutator-evo.git
 cd mutator-evo
+echo "from setuptools import setup, find_packages
+setup(
+    name='mutator_evo',
+    version='0.1',
+    packages=find_packages(where='src'),
+    package_dir={'': 'src'},
+)" > setup.py
+
 pip install -r requirements.txt
 pip install -e .
 ```
