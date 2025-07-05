@@ -1,4 +1,3 @@
-# src/mutator_evo/backtest/backtrader_adapter.py
 import backtrader as bt
 import numpy as np
 import pandas as pd
@@ -7,6 +6,10 @@ import traceback
 import math
 import random
 import logging
+import zlib
+import pickle
+import hashlib
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -15,72 +18,75 @@ class BacktraderAdapter:
     - Divides dataset 70/30 (IS/OOS)
     - Cleans NaN/±∞ values
     - Calculates metrics + overfitting penalty
-    - Fails only in extreme cases
+    - Implements LRU cache for backtest results
+    - Compresses market data to save memory
     """
 
     # ---------- INIT ----------
     def __init__(self, full_data_feed: bt.feeds.PandasData):
-        self._original_df: pd.DataFrame = (
-            full_data_feed.params.dataname
-            .copy()
-            .replace([np.inf, -np.inf], np.nan)
-            .ffill()
-            .bfill()
-        )
+        # Compress market data for memory efficiency
+        self._compressed_data = self._compress_data(full_data_feed.params.dataname)
+        self._init_cache()
+        self._cache_hits = 0
+        self._cache_misses = 0
         
-        # Ensure no zero or negative prices
-        self._original_df = self._original_df[self._original_df["close"] > 0.001]
-        self._original_df["volume"] = self._original_df["volume"].replace(0, 1)  # Avoid zero volume
-
-        req = {"open", "high", "low", "close", "volume"}
-        if not req.issubset(map(str.lower, self._original_df.columns)):
-            raise ValueError(f"Dataset must contain columns {req}")
-
+    def _compress_data(self, df: pd.DataFrame) -> bytes:
+        """Compress market data using zlib and pickle"""
+        return zlib.compress(pickle.dumps(df), 3)
+    
+    def _decompress_data(self) -> pd.DataFrame:
+        """Decompress market data"""
+        return pickle.loads(zlib.decompress(self._compressed_data))
+    
+    def _init_cache(self):
+        """Initialize LRU cache for backtest results"""
+        self._cache = {}
+        self._cache_order = []
+        
+    def _generate_strategy_hash(self, emb) -> str:
+        """Generate unique hash for strategy features"""
+        features_str = json.dumps(emb.features, sort_keys=True)
+        return hashlib.sha256(features_str.encode()).hexdigest()
+    
     # ---------- PUBLIC METHODS ----------
     def evaluate(self, emb) -> Dict[str, float]:
-        try:
-            is_data, oos_data = self._split_data()
-        except Exception as e:
-            logger.error(f"Data split failed: {e}")
-            return self._default_results()
-
-        # Run backtests sequentially instead of parallel
-        is_res = self._safe_backtest(emb, is_data, "IS")
-        oos_res = self._safe_backtest(emb, oos_data, "OOS")
+        # Generate unique hash for this strategy
+        strategy_hash = self._generate_strategy_hash(emb)
         
-        pen = self._penalty(is_res, oos_res)
-
-        return {
-            "is_sharpe": is_res["sharpe"],
-            "is_max_drawdown": is_res["max_drawdown"],
-            "is_win_rate": is_res["win_rate"],
-            "oos_sharpe": oos_res["sharpe"],
-            "oos_max_drawdown": oos_res["max_drawdown"],
-            "oos_win_rate": oos_res["win_rate"],
-            "overfitting_penalty": pen,
-            "trade_count": is_res["trade_count"] + oos_res["trade_count"],
-        }
+        # Check cache first
+        if strategy_hash in self._cache:
+            self._cache_hits += 1
+            return self._cache[strategy_hash]
+        
+        self._cache_misses += 1
+        
+        # Perform backtest if not in cache
+        result = self._perform_backtest(emb)
+        
+        # Update cache
+        self._cache[strategy_hash] = result
+        self._cache_order.append(strategy_hash)
+        
+        # Maintain LRU cache size
+        if len(self._cache_order) > 50:
+            oldest_hash = self._cache_order.pop(0)
+            del self._cache[oldest_hash]
+            
+        return result
     
     @property
     def original_df(self) -> pd.DataFrame:
-        """Returns a copy of the original data for passing to worker processes"""
-        return self._original_df.copy()
+        """Returns a copy of the original data"""
+        return self._decompress_data().copy()
 
     # ------------------------------------------------------------
     #                INTERNAL METHODS
     # ------------------------------------------------------------
     def _split_data(self) -> Tuple[bt.DataBase, bt.DataBase]:
-        split = int(len(self._original_df) * 0.7)
-        df_is = (
-            self._original_df.iloc[:split]
-            .dropna(subset=["open", "high", "low", "close", "volume"])
-            .copy()
-        )
-        df_oos = (
-            self._original_df.iloc[split:]
-            .dropna(subset=["open", "high", "low", "close", "volume"])
-            .copy()
-        )
+        df = self._decompress_data()
+        split = int(len(df) * 0.7)
+        df_is = df.iloc[:split].copy()
+        df_oos = df.iloc[split:].copy()
         
         # Add small noise to prevent zero price movements
         df_is["close"] = df_is["close"].apply(lambda x: max(x, 0.001))
@@ -564,3 +570,28 @@ class BacktraderAdapter:
         except Exception as e:
             logger.error(f"Penalty calculation error: {e}")
             return 1.0
+
+    def _perform_backtest(self, emb) -> Dict[str, float]:
+        """Actual backtest execution with error handling"""
+        try:
+            is_data, oos_data = self._split_data()
+        except Exception as e:
+            logger.error(f"Data split failed: {e}")
+            return self._default_results()
+
+        # Run backtests
+        is_res = self._safe_backtest(emb, is_data, "IS")
+        oos_res = self._safe_backtest(emb, oos_data, "OOS")
+        
+        pen = self._penalty(is_res, oos_res)
+
+        return {
+            "is_sharpe": is_res["sharpe"],
+            "is_max_drawdown": is_res["max_drawdown"],
+            "is_win_rate": is_res["win_rate"],
+            "oos_sharpe": oos_res["sharpe"],
+            "oos_max_drawdown": oos_res["max_drawdown"],
+            "oos_win_rate": oos_res["win_rate"],
+            "overfitting_penalty": pen,
+            "trade_count": is_res["trade_count"] + oos_res["trade_count"],
+        }

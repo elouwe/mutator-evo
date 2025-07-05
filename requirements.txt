@@ -8,3 +8,8 @@ shap
 scikit-learn
 ray>=2.0.0
 dill
+protobuf
+pytest-benchmark
+memory_profiler
+matplotlib
+pytest

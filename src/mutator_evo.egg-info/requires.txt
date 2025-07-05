@@ -1,8 +1,0 @@
-backtrader
-numpy
-pandas
-matplotlib
-plotly
-structlog
-sentry_sdk
-dill

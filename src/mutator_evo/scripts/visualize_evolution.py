@@ -7,6 +7,9 @@ import numpy as np
 from plotly.subplots import make_subplots
 import dill
 import traceback
+import logging
+
+logger = logging.getLogger(__name__)
 
 def plot_operator_impact_rates(evolution_df, data_dir):
     """Visualize operator impact rates with usage counts"""
@@ -114,6 +117,11 @@ def plot_evolution(checkpoint_dir: str):
                 print(f"Skipping {checkpoint.name}: empty strategy pool")
                 continue
                 
+            # Decompress strategies for analysis
+            for s in state["pool"]:
+                if hasattr(s, 'decompress'):
+                    s.decompress()
+            
             pool = state["pool"]
             config_params = state.get("config_params", {})
             importance = state.get("importance", {})
@@ -174,6 +182,11 @@ def plot_evolution(checkpoint_dir: str):
             valid_checkpoints += 1
             print(f"Processed checkpoint {checkpoint.name} (gen {valid_checkpoints})")
             
+            # Recompress strategies to save memory
+            for s in pool:
+                if hasattr(s, 'compress'):
+                    s.compress()
+                    
         except Exception as e:
             print(f"Error loading checkpoint {checkpoint}: {str(e)}")
             traceback.print_exc()

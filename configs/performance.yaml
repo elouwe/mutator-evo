@@ -1,0 +1,22 @@
+# System Performance Configuration
+performance:
+  # Ray settings
+  ray:
+    monitoring: true
+    metrics_interval: 60  # Metrics collection interval in seconds
+  
+  # Compression settings
+  compression:
+    enabled: true
+    algorithm: zlib       # Possible values: zlib, lz4, msgpack
+    level: 3              # Compression level (for zlib)
+  
+  # Cache settings
+  cache:
+    max_size: 50          # Maximum number of items in cache
+    metrics: true         # Enable cache metrics collection
+  
+  # Logging settings
+  logging:
+    level: INFO           # Logging verbosity level
+    file: performance.log # Log file path

@@ -1,26 +1,28 @@
-Name: mut_213daa03
-Score: 10.00
-OOS Sharpe: 8.24
-OOS Drawdown: 3.74%
-OOS Win Rate: 0.47
-Trade count: 346
+Name: mut_93ab20c1
+Score: 0.70
+OOS Sharpe: 1.00
+OOS Drawdown: 0.00%
+OOS Win Rate: 1.00
+Trade count: 11
 
 Features:
-  sma_period: 11
-  use_sma: True
-  ema_period: 11
-  macd_fast: True
-  rsi_period: 13
-  use_rsi: False
-  rl_agent: {'hidden_layers': [235, 134, 232], 'learning_rate': 0.003615155971910608, 'gamma': 1.1784392967509865, 'epsilon': 0.2614213591415829, 'use_attention': False, 'weights': None}
-  stop_loss: 0.030657442461351735
-  use_bollinger: True
-  use_stoch: True
-  trade_size: 0.2325982003952747
-  bollinger_period: 25
-  macd_signal: True
-  stoch_d: True
-  adx_period: 17
+  adx_period: 20
+  bollinger_period: 9
+  ema_period: 7
+  macd_signal: False
+  macd_slow: False
+  rl_agent: {'epsilon': 0.10971588984820806, 'gamma': 0.8235455798337789, 'hidden_layers': [121, 57], 'learning_rate': 0.007127382310163394}
+  rsi_period: 38
+  sma_period: 38.219671646742206
+  stoch_d: False
   stoch_k: True
-  take_profit: 0.03963828624402362
+  stop_loss: 0.02629066946048964
+  take_profit: 0.0772855516361392
+  trade_size: 0.20716250118605106
+  use_adx: False
+  use_bollinger: True
   use_macd: False
+  use_obv: True
+  use_rsi: True
+  use_sma: True
+  use_stoch: True

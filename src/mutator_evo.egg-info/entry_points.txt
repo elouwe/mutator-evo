@@ -1,2 +1,0 @@
-[console_scripts]
-mutator-evo = mutator_evo.scripts.run_evolution:main

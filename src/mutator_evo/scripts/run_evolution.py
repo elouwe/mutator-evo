@@ -12,15 +12,14 @@ import json
 from pathlib import Path
 import ray
 
-# Add project root to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
-# Now import our modules
 from mutator_evo.core.strategy_mutator import StrategyMutatorV2
 from mutator_evo.core.strategy_embedding import StrategyEmbedding
 from mutator_evo.backtest.backtrader_adapter import BacktraderAdapter
+from mutator_evo.utils.memory_tracker import MemoryTracker
+from mutator_evo.scripts.generate_performance_report import generate_performance_report
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -37,11 +36,9 @@ def load_market_data() -> bt.feeds.PandasData:
     n = len(dates)
     np.random.seed(42)
     
-    # Create strong upward and downward trends
     prices = np.ones(n) * 100
     trend_direction = 1
     
-    # Different trend lengths for more realism
     trend_lengths = [60, 90, 120, 75, 100]
     trend_idx = 0
     
@@ -50,33 +47,24 @@ def load_market_data() -> bt.feeds.PandasData:
         trend_idx += 1
         
         if i + trend_length < n:
-            # Stronger trends (3-8%)
             trend_strength = 0.03 + 0.05 * random.random()
             
-            # Trend phase (80% of the period)
             for j in range(i, i + int(trend_length * 0.8)):
                 if j < n:
                     prices[j] = prices[j-1] * (1 + trend_direction * trend_strength / trend_length)
             
-            # Correction phase (20% of the period)
             for j in range(i + int(trend_length * 0.8), i + trend_length):
                 if j < n:
                     prices[j] = prices[j-1] * (1 - trend_direction * trend_strength / (trend_length * 0.5))
             
-            # Reverse direction
             trend_direction *= -1
     
-    # Add volatility
     for i in range(1, n):
-        # Higher volatility (1.5% base + sine wave modulation)
         volatility = 0.015 * (1 + 0.8 * np.sin(i/20))
         change = np.random.normal(0, volatility)
         prices[i] = prices[i] * (1 + change)
-        
-        # Ensure prices don't go negative
         prices[i] = max(0.1, prices[i])
     
-    # Generate OHLCV data
     opens = np.zeros(n)
     highs = np.zeros(n)
     lows = np.zeros(n)
@@ -90,7 +78,6 @@ def load_market_data() -> bt.feeds.PandasData:
         change = np.random.normal(0, intraday_vol)
         prices[i] = prices[i] * (1 + change)
         
-        # Larger daily ranges (1.5-3%)
         daily_range = 0.015 * (1 + 1.0 * random.random())
         high_ratio = 1 + daily_range * random.random()
         low_ratio = 1 - daily_range * random.random()
@@ -98,7 +85,6 @@ def load_market_data() -> bt.feeds.PandasData:
         highs[i] = max(prices[i] * high_ratio, prices[i])
         lows[i] = min(prices[i] * low_ratio, prices[i])
         
-        # Volume proportional to volatility
         volumes[i] = 20000 + int(100000 * abs(change) / intraday_vol)
     
     df = pd.DataFrame({
@@ -115,10 +101,10 @@ def initialize_mutator(data_feed) -> StrategyMutatorV2:
     adapter = BacktraderAdapter(full_data_feed=data_feed)
     return StrategyMutatorV2(
         backtest_adapter=adapter,
-        use_shap=True,  # Enable SHAP-based feature importance
-        top_k=15,  # Keep more top strategies
-        n_mutants=15,  # Generate more mutants
-        max_age=8,  # Faster rotation
+        use_shap=True,
+        top_k=15,
+        n_mutants=15,
+        max_age=8,
         checkpoint_every=15,
         max_checkpoints=10,
         mutation_probs={
@@ -128,10 +114,10 @@ def initialize_mutator(data_feed) -> StrategyMutatorV2:
             "invert": 0.30,
             "metaboost": 0.25,
             "crossover": 0.60,
-            "uniform_crossover": 0.45,  # New
-            "rl_mutation": 0.35,        # New
+            "uniform_crossover": 0.45,
+            "rl_mutation": 0.35,
         },
-        checkpoint_dir="checkpoints"  # Explicit checkpoint directory
+        checkpoint_dir="checkpoints"
     )
 
 def initialize_feature_bank(mutator: StrategyMutatorV2):
@@ -142,7 +128,7 @@ def initialize_feature_bank(mutator: StrategyMutatorV2):
         'macd_fast', 'macd_slow', 'macd_signal',
         'stoch_k', 'stoch_d', 'bollinger_period',
         'adx_period', 'trade_size', 'stop_loss', 'take_profit',
-        'rl_agent'  # New
+        'rl_agent'
     }
 
 def run_evolution(mutator: StrategyMutatorV2, epochs: int = 100):
@@ -150,7 +136,6 @@ def run_evolution(mutator: StrategyMutatorV2, epochs: int = 100):
     for epoch in range(1, epochs + 1):
         logger.info(f"\nEpoch {epoch}/{epochs}")
         try:
-            # Dynamically increase mutation probabilities after 30 epochs
             if epoch == 30:
                 mutator.config._params["mutation_probs"] = {
                     "add": 0.65,
@@ -159,8 +144,8 @@ def run_evolution(mutator: StrategyMutatorV2, epochs: int = 100):
                     "invert": 0.40,
                     "metaboost": 0.35,
                     "crossover": 0.70,
-                    "uniform_crossover": 0.55,  # New
-                    "rl_mutation": 0.45,        # New
+                    "uniform_crossover": 0.55,
+                    "rl_mutation": 0.45,
                 }
                 logger.info("Increased mutation probabilities for more exploration")
             
@@ -168,14 +153,12 @@ def run_evolution(mutator: StrategyMutatorV2, epochs: int = 100):
         except Exception as e:
             logger.error(f"Epoch error: {str(e)}")
             logger.error(traceback.format_exc())
-            # Reset pool with more strategies
             mutator.strategy_pool = [
                 StrategyEmbedding.create_random(mutator.feature_bank)
-                for _ in range(50)  # Increased from 25 to 50
+                for _ in range(50)
             ]
             mutator.pending_evaluation = {}
             
-            # Save emergency checkpoint
             try:
                 mutator.save_checkpoint(f"emergency_checkpoint_epoch{epoch}.pkl")
                 logger.info("Saved emergency checkpoint")
@@ -187,7 +170,6 @@ def generate_visualizations():
         from mutator_evo.scripts.visualize_evolution import plot_evolution
         logger.info("Generating visualizations...")
         
-        # Create visualizations directory
         vis_dir = Path("visualizations")
         vis_dir.mkdir(exist_ok=True)
         
@@ -199,10 +181,14 @@ def generate_visualizations():
 
 def main():
     ray_initialized = False
-    use_ray = True  # Flag for using Ray
+    use_ray = True
+    
+    # Start memory tracker
+    mem_tracker = MemoryTracker(interval=300)  # Snapshot every 5 minutes
+    mem_tracker.start()
+    logger.info("Memory tracking started")
     
     try:
-        # Check Ray availability
         try:
             import ray
             from ray._private import services
@@ -213,7 +199,6 @@ def main():
             use_ray = False
             
         if use_ray:
-            # Ray initialization parameters to avoid port conflicts
             init_args = {
                 "num_cpus": 4,
                 "ignore_reinit_error": True,
@@ -221,16 +206,15 @@ def main():
                 "object_store_memory": 2 * 10**9,
                 "_system_config": {
                     "max_direct_call_object_size": 10**6,
-                    "port_retries": 100,  # Increase retry count
-                    "gcs_server_request_timeout_seconds": 30,  # Increase timeout
-                    "gcs_rpc_server_reconnect_timeout_s": 30,  # Reconnect timeout
+                    "port_retries": 100,
+                    "gcs_server_request_timeout_seconds": 30,
+                    "gcs_rpc_server_reconnect_timeout_s": 30,
                 },
-                "include_dashboard": False,  # Disable dashboard
-                "dashboard_host": "127.0.0.1",  # Use local host
-                "dashboard_port": None  # Don't use fixed port
+                "include_dashboard": False,
+                "dashboard_host": "127.0.0.1",
+                "dashboard_port": None
             }
             
-            # Initialize Ray
             try:
                 ray.init(**init_args)
                 ray_initialized = True
@@ -242,7 +226,6 @@ def main():
         else:
             logger.info("Using local execution without Ray")
         
-        # Create results directory
         results_dir = Path("results")
         results_dir.mkdir(exist_ok=True)
         os.chdir(results_dir)
@@ -253,8 +236,6 @@ def main():
         logger.info("Initializing mutator...")
         mutator = initialize_mutator(data_feed)
         initialize_feature_bank(mutator)
-        
-        # Pass use_ray flag to mutator for use in evolve()
         mutator.use_ray = use_ray
         
         logger.info("Creating initial pool of 30 random strategies...")
@@ -269,17 +250,17 @@ def main():
         logger.info("\nEvolution completed successfully!")
         if mutator.strategy_pool:
             best = max(mutator.strategy_pool, key=lambda s: s.score())
+            best.decompress()
+            
             logger.info(f"Best strategy: {best.name}")
             logger.info(f"Features: {list(best.features.keys())}")
             logger.info(f"Score: {best.score():.2f}")
             
-            # Detailed metrics logging
             if best.oos_metrics:
                 logger.info("Metrics details:")
                 for metric, value in best.oos_metrics.items():
                     logger.info(f"  {metric}: {value}")
             
-            # Save best strategy details
             with open("best_strategy.txt", "w") as f:
                 f.write(f"Name: {best.name}\n")
                 f.write(f"Score: {best.score():.2f}\n")
@@ -291,7 +272,6 @@ def main():
                 for k, v in best.features.items():
                     f.write(f"  {k}: {v}\n")
             
-            # Save as JSON for further analysis
             with open("best_strategy.json", "w") as f:
                 json.dump({
                     "name": best.name,
@@ -302,15 +282,12 @@ def main():
         else:
             logger.warning("No strategies in pool after evolution")
         
-        # Generate visualizations after evolution
         generate_visualizations()
-        
         logger.info("All operations completed successfully!")
     except Exception as e:
         logger.critical(f"Fatal error in main process: {str(e)}")
         logger.critical(traceback.format_exc())
         try:
-            # Try to generate visualizations even on error
             generate_visualizations()
         except:
             logger.error("Failed to generate visualizations after error")
@@ -318,6 +295,23 @@ def main():
         if ray_initialized:
             ray.shutdown()
             logger.info("Ray resources released")
+        
+        # Stop memory tracker and generate report
+        mem_tracker.stop()
+        report_path = "memory_usage_report.txt"
+        mem_tracker.generate_report(report_path)
+        logger.info(f"Memory report generated: {report_path}")
+        
+        # Generate performance report
+        if 'mutator' in locals() and 'adapter' in locals():
+            perf_report = generate_performance_report(mutator, adapter)
+            if perf_report:
+                logger.info(f"Performance report generated with {len(perf_report)} records")
+            else:
+                logger.warning("Performance report generation returned empty")
+        else:
+            logger.warning("Skipping performance report because mutator or adapter is not defined")
+        
         logger.info("Program terminated")
 
 if __name__ == "__main__":

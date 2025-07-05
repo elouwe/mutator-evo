@@ -1,45 +1,44 @@
 {
-  "name": "mut_213daa03",
+  "name": "mut_93ab20c1",
   "features": {
-    "sma_period": 11,
-    "use_sma": true,
-    "ema_period": 11,
-    "macd_fast": true,
-    "rsi_period": 13,
-    "use_rsi": false,
+    "adx_period": 20,
+    "bollinger_period": 9,
+    "ema_period": 7,
+    "macd_signal": false,
+    "macd_slow": false,
     "rl_agent": {
+      "epsilon": 0.10971588984820806,
+      "gamma": 0.8235455798337789,
       "hidden_layers": [
-        235,
-        134,
-        232
+        121,
+        57
       ],
-      "learning_rate": 0.003615155971910608,
-      "gamma": 1.1784392967509865,
-      "epsilon": 0.2614213591415829,
-      "use_attention": false,
-      "weights": null
+      "learning_rate": 0.007127382310163394
     },
-    "stop_loss": 0.030657442461351735,
-    "use_bollinger": true,
-    "use_stoch": true,
-    "trade_size": 0.2325982003952747,
-    "bollinger_period": 25,
-    "macd_signal": true,
-    "stoch_d": true,
-    "adx_period": 17,
+    "rsi_period": 38,
+    "sma_period": 38.219671646742206,
+    "stoch_d": false,
     "stoch_k": true,
-    "take_profit": 0.03963828624402362,
-    "use_macd": false
+    "stop_loss": 0.02629066946048964,
+    "take_profit": 0.0772855516361392,
+    "trade_size": 0.20716250118605106,
+    "use_adx": false,
+    "use_bollinger": true,
+    "use_macd": false,
+    "use_obv": true,
+    "use_rsi": true,
+    "use_sma": true,
+    "use_stoch": true
   },
-  "score": 10.0,
+  "score": 0.7,
   "metrics": {
-    "is_sharpe": 0.7502403632452724,
-    "is_max_drawdown": 6.821760257201979,
-    "is_win_rate": 0.5030674846625767,
-    "oos_sharpe": 8.235933781134941,
-    "oos_max_drawdown": 3.736547921003399,
-    "oos_win_rate": 0.47368421052631576,
-    "overfitting_penalty": 0.002938327413626091,
-    "trade_count": 346
+    "is_sharpe": 0.7071067811865475,
+    "is_max_drawdown": 1.0422973557518367,
+    "is_win_rate": 1.0,
+    "oos_sharpe": 1.0,
+    "oos_max_drawdown": 0.0,
+    "oos_win_rate": 1.0,
+    "overfitting_penalty": 0.0,
+    "trade_count": 11
   }
 }
