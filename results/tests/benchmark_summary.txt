@@ -1,0 +1,15 @@
+BENCHMARK SUMMARY: 10,000 STRATEGIES
+==================================================
+Strategy Generation: 0.04s
+Evaluation Time:     105.18s
+Total Time:          105.21s
+Throughput:          95.08 strategies/s
+Memory Used:         -12.27 MB
+
+Key Statistics:
+Average Score:      0.4989
+Max Strategy Score: 0.9758
+Avg Sharpe Ratio:   -0.0029
+Avg Processing:     79.89ms/strategy
+Top Strategy:       strat_2719
+==================================================
