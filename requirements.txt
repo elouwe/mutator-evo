@@ -13,3 +13,4 @@ pytest-benchmark
 memory_profiler
 matplotlib
 pytest
+gnuplot

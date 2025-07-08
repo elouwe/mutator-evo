@@ -9,6 +9,7 @@ import datetime
 import logging
 import numpy as np
 import ray
+import time
 from collections import deque, defaultdict
 from datetime import date
 from typing import Any, Dict, List, Set, Optional, Tuple
@@ -19,6 +20,7 @@ import hashlib
 
 from .config import DynamicConfig
 from .ray_pool import RayPool
+from .strategy_embedding import StrategyEmbedding
 from ..operators.interfaces import IMutationOperator, IFeatureImportanceCalculator
 from ..operators.mutation_impl import (
     DropMutation, AddMutation, ShiftMutation, 
@@ -46,99 +48,6 @@ except ImportError as e:
 
 logger = logging.getLogger(__name__)
 
-class StrategyEmbedding:
-    def __init__(self, name: str, features: Dict[str, Any]):
-        self.name = name
-        self._features = features
-        self._compressed: Optional[bytes] = None
-        self.oos_metrics: Optional[Dict[str, float]] = None
-        self._hash: Optional[str] = None
-
-    @property
-    def features(self) -> Dict[str, Any]:
-        if self._compressed is not None:
-            self._decompress()
-        return self._features
-
-    @features.setter
-    def features(self, value: Dict[str, Any]):
-        self._features = value
-        self._compressed = None
-        self._hash = None
-
-    def compress(self):
-        if self._compressed is None and self._features is not None:
-            json_str = json.dumps(self._features, sort_keys=True)
-            self._compressed = zlib.compress(json_str.encode(), level=3)
-            del self._features
-            self._features = None
-
-    def _decompress(self):
-        if self._compressed is not None:
-            json_str = zlib.decompress(self._compressed).decode()
-            self._features = json.loads(json_str)
-            self._compressed = None
-
-    def decompress(self):
-        self._decompress()
-
-    def get_hash(self) -> str:
-        if self._hash is None:
-            if self._compressed is not None:
-                self._decompress()
-            features_str = json.dumps(self._features, sort_keys=True)
-            self._hash = hashlib.sha256(features_str.encode()).hexdigest()
-        return self._hash
-
-    def score(self) -> float:
-        if not self.oos_metrics:
-            return -10.0
-        
-        sharpe = self.oos_metrics.get("oos_sharpe", 0)
-        dd = self.oos_metrics.get("oos_max_drawdown", 100)
-        penalty = self.oos_metrics.get("overfitting_penalty", 1.0)
-        
-        trade_count = self.oos_metrics.get("trade_count", 0)
-        if trade_count < 10:
-            return -5.0
-        
-        return (sharpe * 0.7 - dd * 0.3) * (1 - penalty)
-
-    @classmethod
-    def create_random(cls, feature_bank: Set[str]) -> "StrategyEmbedding":
-        name = f"rand_{uuid.uuid4().hex[:8]}"
-        features = {}
-        
-        num_features = min(random.randint(3, 8), len(feature_bank))
-        selected_features = random.sample(list(feature_bank), num_features)
-        
-        for feat in selected_features:
-            if feat in {"trade_size", "stop_loss", "take_profit"}:
-                if feat == "trade_size":
-                    features[feat] = random.uniform(0.1, 0.3)
-                elif feat == "stop_loss":
-                    features[feat] = random.uniform(0.01, 0.05)
-                elif feat == "take_profit":
-                    features[feat] = random.uniform(0.03, 0.08)
-            elif "period" in feat or "window" in feat:
-                features[feat] = random.randint(5, 50)
-            elif feat == "rl_agent":
-                features[feat] = {
-                    "hidden_layers": [
-                        random.randint(32, 128) 
-                        for _ in range(random.randint(1, 3))
-                    ],
-                    "learning_rate": 10**random.uniform(-4, -2),
-                    "gamma": random.uniform(0.8, 0.99),
-                    "epsilon": random.uniform(0.05, 0.2)
-                }
-            else:
-                features[feat] = random.random() > 0.3
-                
-        strategy = cls(name, features)
-        strategy.compress()
-        return strategy
-
 class StrategyMutatorV2:
     def __init__(self, backtest_adapter=None, use_shap=True, **kwargs):
         self.archival_pool: List[StrategyEmbedding] = []
@@ -164,9 +73,11 @@ class StrategyMutatorV2:
         self.importance: Dict[str, float] = {}
         self.backtest_adapter = backtest_adapter
         self.use_ray = True
+        self.backtest_time = 0.0
         
         self.operator_usage = []
         self.pending_evaluation = {}
+        self.rl_usage = 0.0
 
     def _init_operators(self):
         self.mutation_operators = [
@@ -226,11 +137,18 @@ class StrategyMutatorV2:
             logger.info("[mutator] Skipped: frozen")
             return
 
+        # Check for degeneration: if all strategies have score < -2.0
+        if self.strategy_pool and all(s.score() < -2.0 for s in self.strategy_pool):
+            logger.warning("Pool degradation detected! Reinitializing with enhanced strategies...")
+            self._reinitialize_pool()
+            return
+
         if not self.strategy_pool:
             self._reinitialize_pool()
             return
 
         self.step += 1
+        start_time = time.time()
         
         try:
             # Step 1: Decompress all strategies
@@ -273,6 +191,7 @@ class StrategyMutatorV2:
             new_strategies = [s for s in self.strategy_pool if s.oos_metrics is None]
             if new_strategies and self.backtest_adapter:
                 logger.info(f"Backtesting {len(new_strategies)} strategies...")
+                backtest_start = time.time()
                 
                 market_data = self.backtest_adapter.original_df
                 
@@ -314,6 +233,8 @@ class StrategyMutatorV2:
                         except Exception as e:
                             logger.error(f"Failed to evaluate {strategy.name}: {str(e)}")
                             strategy.oos_metrics = self._default_metrics()
+                
+                self.backtest_time = time.time() - backtest_start
 
             # Step 4: Sort and select top strategies
             self.strategy_pool.sort(key=lambda s: s.score(), reverse=True)
@@ -323,14 +244,38 @@ class StrategyMutatorV2:
                 self._reinitialize_pool()
                 return
                 
+            # Calculate RL usage in the current pool
+            rl_count = sum(1 for s in self.strategy_pool if 'rl_agent' in s.features)
+            self.rl_usage = rl_count / len(self.strategy_pool)
+            self.config.rl_usage = self.rl_usage  # Pass to config for mutation adaptation
+
+            # --- IMMUNITY: Save top 10% strategies unchanged ---
+            immune_count = int(0.1 * len(self.strategy_pool))
+            immune_strategies = self.strategy_pool[:immune_count]
+            
+            # --- TOURNAMENT SELECTION for the rest ---
+            tournament_size = 5
+            selected = []
             top_k = min(self.config.top_k, len(self.strategy_pool))
-            top = self.strategy_pool[:top_k]
+            # We need to select (top_k - immune_count) strategies
+            for _ in range(top_k - immune_count):
+                # Randomly select tournament_size candidates
+                candidates = random.sample(self.strategy_pool, tournament_size)
+                # Select the best from the candidates
+                winner = max(candidates, key=lambda s: s.score())
+                selected.append(winner)
+            
+            # Combine immune and tournament selected
+            self.strategy_pool = immune_strategies + selected
+            # Sort again and keep only top_k
+            self.strategy_pool.sort(key=lambda s: s.score(), reverse=True)
+            self.strategy_pool = self.strategy_pool[:top_k]
 
             # Calculate feature importance
             try:
                 method = "SHAP" if self.use_shap else "Default"
                 logger.info(f"Calculating feature importance using {method} method...")
-                self.importance = self.importance_calculator.compute(top)
+                self.importance = self.importance_calculator.compute(self.strategy_pool)
                 
                 if self.importance:
                     sorted_importance = sorted(
@@ -343,23 +288,22 @@ class StrategyMutatorV2:
                         logger.info(f"  {feat}: {imp:.4f}")
             except Exception as e:
                 logger.error(f"Feature importance error: {str(e)}")
-                self.importance = DefaultFeatureImportanceCalculator().compute(top)
+                self.importance = DefaultFeatureImportanceCalculator().compute(self.strategy_pool)
 
-            self.strategy_pool = top.copy()
-            self.config.top_strategies = top
+            self.config.top_strategies = self.strategy_pool
 
             # Step 5: Generate mutants
             new = []
             self.operator_usage = []
             
             for _ in range(self.config.n_mutants):
-                if random.random() < self.config.mutation_probs["crossover"] and len(top) >= 2:
-                    p1, p2 = random.sample(top, 2)
+                if random.random() < self.config.mutation_probs["crossover"] and len(self.strategy_pool) >= 2:
+                    p1, p2 = random.sample(self.strategy_pool, 2)
                     parent_feats = {**p1.features, **p2.features}
                     parent_name = f"{p1.name}+{p2.name}"
                 else:
-                    weights = [max(s.score(), 0.01) for s in top]
-                    parent = random.choices(top, weights=weights)[0]
+                    weights = [max(s.score(), 0.01) for s in self.strategy_pool]
+                    parent = random.choices(self.strategy_pool, weights=weights)[0]
                     parent_feats = dict(parent.features)
                     parent_name = parent.name
 
@@ -405,13 +349,24 @@ class StrategyMutatorV2:
             logger.error(traceback.format_exc())
             self._reinitialize_pool()
 
+    # CRITICAL FIX: Improved pool reinitialization
     def _reinitialize_pool(self):
-        logger.info("[mutator] Reinitializing strategy pool with 50 strategies")
+        logger.info("[mutator] Reinitializing strategy pool with enhanced strategies")
         self.strategy_pool = [
             StrategyEmbedding.create_random(self.feature_bank)
             for _ in range(50)
         ]
+        
+        # Reset pending evaluations
         self.pending_evaluation = {}
+        
+        # Reset operator statistics
+        self.config.operator_stats = {op: {"n": 0, "total_impact": 0} 
+                                    for op in self.config.operator_stats}
+        
+        # Boost mutation probabilities
+        for op in self.config.mutation_probs:
+            self.config.mutation_probs[op] = min(0.8, self.config.mutation_probs[op] * 1.3)
     
     @staticmethod
     def evaluate_strategy_wrapper(args: Tuple[StrategyEmbedding, pd.DataFrame]) -> Dict[str, float]:
@@ -427,20 +382,21 @@ class StrategyMutatorV2:
             logger.error(f"Backtest failed for {strategy.name}: {str(e)}")
             logger.error(traceback.format_exc())
             return {
-                "oos_sharpe": -5.0,
-                "oos_max_drawdown": 100.0,
-                "oos_win_rate": 0.0,
-                "overfitting_penalty": 1.0,
-                "trade_count": 0
+                "oos_sharpe": -1.0,  # Less severe penalty
+                "oos_max_drawdown": 50.0,
+                "oos_win_rate": 0.3,
+                "overfitting_penalty": 0.8,
+                "trade_count": 10
             }
     
+    # CRITICAL FIX: Better default values
     def _default_metrics(self):
         return {
-            "oos_sharpe": -5.0,
-            "oos_max_drawdown": 100.0,
-            "oos_win_rate": 0.0,
-            "overfitting_penalty": 1.0,
-            "trade_count": 0
+            "oos_sharpe": -1.0,  # Less severe penalty
+            "oos_max_drawdown": 50.0,
+            "oos_win_rate": 0.3,
+            "overfitting_penalty": 0.8,
+            "trade_count": 10
         }
 
     def save_checkpoint(self, path: Optional[str] = None) -> None:
@@ -467,6 +423,7 @@ class StrategyMutatorV2:
                     "importance": self.importance,
                     "operator_stats": self.config.operator_stats,
                     "pending_evaluation": self.pending_evaluation,
+                    "rl_usage": self.rl_usage
                 }, f)
             logger.info(f"Checkpoint saved: {path}")
             
@@ -505,6 +462,7 @@ class StrategyMutatorV2:
             self.current_equity = state.get("current_equity", 0.0)
             self.importance = state.get("importance", {})
             self.pending_evaluation = state.get("pending_evaluation", {})
+            self.rl_usage = state.get("rl_usage", 0.0)
             
             operator_stats = state.get("operator_stats", {})
             for op, stats in operator_stats.items():

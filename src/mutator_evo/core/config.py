@@ -30,6 +30,7 @@ class DynamicConfig:
         # State for adaptation
         self.performance_history = []
         self.top_strategies = []
+        self.rl_usage = 0.0
         
         # Initialize operator stats for UCB
         self.operator_stats = {
@@ -162,3 +163,17 @@ class DynamicConfig:
                 smoothed_prob = 0.7 * current_prob + 0.3 * new_prob
                 self._params["mutation_probs"][op_short] = smoothed_prob
                 logger.debug(f"  {op_short}: impact={avg_impact:.3f} prob: {current_prob:.2f} -> {smoothed_prob:.2f}")
+        
+        # Automatically increase RL probability when usage is low
+        if self.rl_usage < 0.2 and "rl_mutation" in self._params["mutation_probs"]:
+            current_rl_prob = self._params["mutation_probs"]["rl_mutation"]
+            new_rl_prob = min(0.6, current_rl_prob * 1.3)
+            self._params["mutation_probs"]["rl_mutation"] = new_rl_prob
+            logger.info(f"Increasing RL mutation to {new_rl_prob:.2f} due to low usage")
+        
+        # Automatically increase crossover probability
+        if "crossover" in self._params["mutation_probs"]:
+            current_crossover_prob = self._params["mutation_probs"]["crossover"]
+            new_crossover_prob = min(0.9, current_crossover_prob * 1.1)
+            self._params["mutation_probs"]["crossover"] = new_crossover_prob
+            logger.info(f"Cautiously increasing crossover probability to {new_crossover_prob:.2f}")

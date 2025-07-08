@@ -15,6 +15,11 @@ class RLMutation(IMutationOperator):
         
         if "hidden_layers" in rl_params:
             layers = rl_params["hidden_layers"]
+            # --- Limit the number of layers to 3 ---
+            if len(layers) > 3:
+                layers = layers[:3]
+                rl_params["hidden_layers"] = layers
+                
             if layers and random.random() < 0.3:
                 layer_idx = random.randint(0, len(layers)-1)
                 layers[layer_idx] = max(8, layers[layer_idx] + random.randint(-4, 4))

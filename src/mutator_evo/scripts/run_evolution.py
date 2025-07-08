@@ -9,6 +9,7 @@ import traceback
 import logging
 import datetime
 import json
+import time
 from pathlib import Path
 import ray
 
@@ -18,7 +19,10 @@ from mutator_evo.core.strategy_mutator import StrategyMutatorV2
 from mutator_evo.core.strategy_embedding import StrategyEmbedding
 from mutator_evo.backtest.backtrader_adapter import BacktraderAdapter
 from mutator_evo.utils.memory_tracker import MemoryTracker
+from mutator_evo.utils.monitoring import EvolutionMonitor
+from mutator_evo.utils.alerts import AlertManager
 from mutator_evo.scripts.generate_performance_report import generate_performance_report
+from mutator_evo.scripts.visualize_evolution import plot_evolution
 
 logging.basicConfig(
     level=logging.INFO,
@@ -31,71 +35,92 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 def load_market_data() -> bt.feeds.PandasData:
-    logger.info("Generating realistic market data with strong trends and volatility...")
-    dates = pd.date_range(start='2020-01-01', end='2023-01-01', freq='D')
-    n = len(dates)
-    np.random.seed(42)
-    
-    prices = np.ones(n) * 100
-    trend_direction = 1
-    
-    trend_lengths = [60, 90, 120, 75, 100]
-    trend_idx = 0
-    
-    for i in range(0, n, trend_lengths[trend_idx % len(trend_lengths)]):
-        trend_length = trend_lengths[trend_idx % len(trend_lengths)]
-        trend_idx += 1
+    # Try to use real market data
+    try:
+        import yfinance as yf
+        logger.info("Downloading real market data from Yahoo Finance...")
+        # Download S&P 500 index data
+        df = yf.download('^GSPC', start='2020-01-01', end='2023-01-01')
+        # Rename columns to match expected structure
+        df = df.rename(columns={
+            'Open': 'open',
+            'High': 'high',
+            'Low': 'low',
+            'Close': 'close',
+            'Volume': 'volume'
+        })
+        # Remove rows with missing values
+        df.dropna(inplace=True)
+        return bt.feeds.PandasData(dataname=df)
+    except Exception as e:
+        logger.error(f"Failed to download real data: {str(e)}. Using synthetic data...")
         
-        if i + trend_length < n:
-            trend_strength = 0.03 + 0.05 * random.random()
+        # Generate synthetic data as fallback
+        logger.info("Generating realistic market data with strong trends and volatility...")
+        dates = pd.date_range(start='2020-01-01', end='2023-01-01', freq='D')
+        n = len(dates)
+        np.random.seed(42)
+        
+        prices = np.ones(n) * 100
+        trend_direction = 1
+        
+        trend_lengths = [60, 90, 120, 75, 100]
+        trend_idx = 0
+        
+        for i in range(0, n, trend_lengths[trend_idx % len(trend_lengths)]):
+            trend_length = trend_lengths[trend_idx % len(trend_lengths)]
+            trend_idx += 1
             
-            for j in range(i, i + int(trend_length * 0.8)):
-                if j < n:
-                    prices[j] = prices[j-1] * (1 + trend_direction * trend_strength / trend_length)
+            if i + trend_length < n:
+                trend_strength = 0.03 + 0.05 * random.random()
+                
+                for j in range(i, i + int(trend_length * 0.8)):
+                    if j < n:
+                        prices[j] = prices[j-1] * (1 + trend_direction * trend_strength / trend_length)
+                
+                for j in range(i + int(trend_length * 0.8), i + trend_length):
+                    if j < n:
+                        prices[j] = prices[j-1] * (1 - trend_direction * trend_strength / (trend_length * 0.5))
+                
+                trend_direction *= -1
+        
+        for i in range(1, n):
+            volatility = 0.015 * (1 + 0.8 * np.sin(i/20))
+            change = np.random.normal(0, volatility)
+            prices[i] = prices[i] * (1 + change)
+            prices[i] = max(0.1, prices[i])
+        
+        opens = np.zeros(n)
+        highs = np.zeros(n)
+        lows = np.zeros(n)
+        volumes = np.zeros(n)
+        
+        opens[0] = prices[0]
+        for i in range(1, n):
+            opens[i] = prices[i-1]
             
-            for j in range(i + int(trend_length * 0.8), i + trend_length):
-                if j < n:
-                    prices[j] = prices[j-1] * (1 - trend_direction * trend_strength / (trend_length * 0.5))
+            intraday_vol = 0.015 * (1 + 0.8 * np.sin(i/20))
+            change = np.random.normal(0, intraday_vol)
+            prices[i] = prices[i] * (1 + change)
             
-            trend_direction *= -1
-    
-    for i in range(1, n):
-        volatility = 0.015 * (1 + 0.8 * np.sin(i/20))
-        change = np.random.normal(0, volatility)
-        prices[i] = prices[i] * (1 + change)
-        prices[i] = max(0.1, prices[i])
-    
-    opens = np.zeros(n)
-    highs = np.zeros(n)
-    lows = np.zeros(n)
-    volumes = np.zeros(n)
-    
-    opens[0] = prices[0]
-    for i in range(1, n):
-        opens[i] = prices[i-1]
+            daily_range = 0.015 * (1 + 1.0 * random.random())
+            high_ratio = 1 + daily_range * random.random()
+            low_ratio = 1 - daily_range * random.random()
+            
+            highs[i] = max(prices[i] * high_ratio, prices[i])
+            lows[i] = min(prices[i] * low_ratio, prices[i])
+            
+            volumes[i] = 20000 + int(100000 * abs(change) / intraday_vol)
         
-        intraday_vol = 0.015 * (1 + 0.8 * np.sin(i/20))
-        change = np.random.normal(0, intraday_vol)
-        prices[i] = prices[i] * (1 + change)
+        df = pd.DataFrame({
+            'open': opens,
+            'high': highs,
+            'low': lows,
+            'close': prices,
+            'volume': volumes
+        }, index=dates)
         
-        daily_range = 0.015 * (1 + 1.0 * random.random())
-        high_ratio = 1 + daily_range * random.random()
-        low_ratio = 1 - daily_range * random.random()
-        
-        highs[i] = max(prices[i] * high_ratio, prices[i])
-        lows[i] = min(prices[i] * low_ratio, prices[i])
-        
-        volumes[i] = 20000 + int(100000 * abs(change) / intraday_vol)
-    
-    df = pd.DataFrame({
-        'open': opens,
-        'high': highs,
-        'low': lows,
-        'close': prices,
-        'volume': volumes
-    }, index=dates)
-    
-    return bt.feeds.PandasData(dataname=df)
+        return bt.feeds.PandasData(dataname=df)
 
 def initialize_mutator(data_feed) -> StrategyMutatorV2:
     adapter = BacktraderAdapter(full_data_feed=data_feed)
@@ -131,11 +156,32 @@ def initialize_feature_bank(mutator: StrategyMutatorV2):
         'rl_agent'
     }
 
-def run_evolution(mutator: StrategyMutatorV2, epochs: int = 100):
+def run_evolution(mutator: StrategyMutatorV2, monitor: EvolutionMonitor, 
+                 alert_manager: AlertManager, epochs: int = 100):
     logger.info("Starting evolution...")
+    best_scores = []
+    degradation_count = 0
+    
     for epoch in range(1, epochs + 1):
+        epoch_start = time.time()
         logger.info(f"\nEpoch {epoch}/{epochs}")
         try:
+            # Add new random strategies every 20 epochs for diversity
+            if epoch % 20 == 0:
+                logger.info("Adding 10 new random strategies for diversity...")
+                new_strategies = [StrategyEmbedding.create_random(mutator.feature_bank) for _ in range(10)]
+                mutator.strategy_pool.extend(new_strategies)
+            
+            # Emergency measures: if average score < -3 for two consecutive generations, reset pool
+            if len(best_scores) >= 2 and best_scores[-1] < -3 and best_scores[-2] < -3:
+                logger.error("Critical degradation detected! Resetting pool...")
+                mutator.strategy_pool = [
+                    StrategyEmbedding.create_random(mutator.feature_bank)
+                    for _ in range(50)
+                ]
+                best_scores = []
+                degradation_count = 0
+            
             if epoch == 30:
                 mutator.config._params["mutation_probs"] = {
                     "add": 0.65,
@@ -150,9 +196,56 @@ def run_evolution(mutator: StrategyMutatorV2, epochs: int = 100):
                 logger.info("Increased mutation probabilities for more exploration")
             
             mutator.evolve()
+            
+            # Update metrics
+            if mutator.strategy_pool:
+                best = max(mutator.strategy_pool, key=lambda s: s.score())
+                best_score = best.score()
+                best_scores.append(best_score)
+                
+                # Calculate metrics for monitoring
+                pool_size = len(mutator.strategy_pool)
+                avg_score = sum(s.score() for s in mutator.strategy_pool) / pool_size
+                feature_count = sum(len(s.features) for s in mutator.strategy_pool) / pool_size
+                rl_usage = sum(1 for s in mutator.strategy_pool if 'rl_agent' in s.features) / pool_size
+                
+                # Update Prometheus metrics
+                monitor.update_generation_metrics(
+                    generation=epoch,
+                    best_score=best_score,
+                    avg_score=avg_score,
+                    pool_size=pool_size,
+                    feature_count=feature_count,
+                    rl_usage=rl_usage
+                )
+                
+                # Track mutation operators
+                if hasattr(mutator, 'operator_usage'):
+                    for operator, _ in mutator.operator_usage:
+                        monitor.count_mutation(operator)
+                
+                # Check for degradation
+                if len(best_scores) > 3:
+                    if best_scores[-1] < best_scores[-2] < best_scores[-3]:
+                        degradation_count += 1
+                        if degradation_count >= 3:
+                            alert_manager.send_degradation_alert(epoch, best_scores[-5:])
+                            degradation_count = 0  # Reset after alert
+                    else:
+                        degradation_count = 0
+                
+                # Record timing metrics
+                epoch_time = time.time() - epoch_start
+                monitor.record_mutation_time(epoch_time)
+                
+                # Record backtest time if available
+                if hasattr(mutator, 'backtest_time'):
+                    monitor.record_backtest_time(mutator.backtest_time)
+            
         except Exception as e:
             logger.error(f"Epoch error: {str(e)}")
             logger.error(traceback.format_exc())
+            monitor.count_error('epoch_error')
             mutator.strategy_pool = [
                 StrategyEmbedding.create_random(mutator.feature_bank)
                 for _ in range(50)
@@ -167,7 +260,6 @@ def run_evolution(mutator: StrategyMutatorV2, epochs: int = 100):
 
 def generate_visualizations():
     try:
-        from mutator_evo.scripts.visualize_evolution import plot_evolution
         logger.info("Generating visualizations...")
         
         vis_dir = Path("visualizations")
@@ -187,6 +279,10 @@ def main():
     mem_tracker = MemoryTracker(interval=300)  # Snapshot every 5 minutes
     mem_tracker.start()
     logger.info("Memory tracking started")
+    
+    # Initialize monitoring and alerting
+    monitor = EvolutionMonitor(port=8000)
+    alert_manager = AlertManager()
     
     try:
         try:
@@ -245,7 +341,7 @@ def main():
         ]
         
         logger.info("Starting evolution process...")
-        run_evolution(mutator, epochs=100)
+        run_evolution(mutator, monitor, alert_manager, epochs=100)
         
         logger.info("\nEvolution completed successfully!")
         if mutator.strategy_pool:
@@ -287,6 +383,7 @@ def main():
     except Exception as e:
         logger.critical(f"Fatal error in main process: {str(e)}")
         logger.critical(traceback.format_exc())
+        monitor.count_error('fatal_error')
         try:
             generate_visualizations()
         except:

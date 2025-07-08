@@ -72,17 +72,17 @@ class ShapFeatureImportanceCalculator:
             for feat in all_features:
                 value = s.features.get(feat)
                 
-                # Специальная обработка для RL-агентов
+                # Special handling for RL agents
                 if feat == "rl_agent":
                     if isinstance(value, dict):
-                        # Преобразуем конфиг RL в числовое представление
+                        # Convert RL config to numerical representation
                         rl_value = 1
                         if "hidden_layers" in value:
                             rl_value += len(value["hidden_layers"]) * 0.1
                     else:
                         rl_value = 0
                     row.append(rl_value)
-                # Обработка других признаков
+                # Handling other features
                 elif isinstance(value, bool):
                     row.append(1 if value else 0)
                 elif value is None:

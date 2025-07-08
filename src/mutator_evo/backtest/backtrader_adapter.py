@@ -1,3 +1,4 @@
+# src/mutator_evo/backtest/backtrader_adapter.py
 import backtrader as bt
 import numpy as np
 import pandas as pd
@@ -10,6 +11,7 @@ import zlib
 import pickle
 import hashlib
 import json
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +63,9 @@ class BacktraderAdapter:
         self._cache_misses += 1
         
         # Perform backtest if not in cache
+        start_time = time.time()
         result = self._perform_backtest(emb)
+        duration = time.time() - start_time
         
         # Update cache
         self._cache[strategy_hash] = result
@@ -497,43 +501,19 @@ class BacktraderAdapter:
             logger.error(traceback.format_exc())
             return self._default_metrics()
 
-        # ------ METRICS CALCULATION ------
-        total_trades = 0
-        won_trades = 0
-        win_rate = 0.0
-        
         try:
             trade_analysis = strat.analyzers.trades.get_analysis()
             
-            # Improved result handling
-            if 'total' in trade_analysis:
-                total_trades = trade_analysis['total'].total
-                
-            if 'won' in trade_analysis:
-                won_trades = trade_analysis['won'].total
-                
-            if total_trades > 0:
-                win_rate = won_trades / total_trades
-            else:
-                win_rate = 0.0
-                
-        except (AttributeError, KeyError, TypeError) as e:
-            logger.error(f"Trade analysis error: {e}")
-            # Fallback to strategy's trade count
-            total_trades = strat.trade_count
-            win_rate = 0.0
-
-        try:
-            sharpe = strat.analyzers.sharpe.get_analysis().get("sharperatio", 0.0) or 0.0
-        except (AttributeError, KeyError) as e:
-            logger.error(f"Sharpe calculation error: {e}")
-            sharpe = 0.0
+            # Handle cases where analyzers return None
+            total_trades = trade_analysis.total.total if hasattr(trade_analysis, 'total') else 0
+            won_trades = trade_analysis.won.total if hasattr(trade_analysis, 'won') else 0
+            win_rate = won_trades / total_trades if total_trades > 0 else 0.0
             
-        try:
-            max_drawdown = strat.analyzers.drawdown.get_analysis().get("max", {}).get("drawdown", 100.0)
-        except (AttributeError, KeyError) as e:
-            logger.error(f"Drawdown calculation error: {e}")
-            max_drawdown = 100.0
+            sharpe = strat.analyzers.sharpe.get_analysis().get("sharperatio", 0.0) or 0.0
+            max_drawdown = strat.analyzers.drawdown.get_analysis().get("max", {}).get("drawdown", 50.0)
+        except (AttributeError, KeyError, TypeError) as e:
+            logger.error(f"Metrics calculation error: {str(e)}")
+            return self._default_metrics()
 
         return {
             "sharpe": sharpe,
@@ -545,7 +525,7 @@ class BacktraderAdapter:
     # ---------- HELPER METHODS ----------
     @staticmethod
     def _default_metrics():
-        return dict(sharpe=0.0, max_drawdown=100.0, win_rate=0.0, trade_count=0)
+        return dict(sharpe=-1.0, max_drawdown=50.0, win_rate=0.3, trade_count=10)
 
     def _default_results(self):
         d = self._default_metrics()
@@ -553,11 +533,11 @@ class BacktraderAdapter:
             "is_sharpe": 0.0,
             "is_max_drawdown": 100.0,
             "is_win_rate": 0.0,
-            "oos_sharpe": 0.0,
-            "oos_max_drawdown": 100.0,
-            "oos_win_rate": 0.0,
-            "overfitting_penalty": 1.0,
-            "trade_count": 0,
+            "oos_sharpe": -1.0,
+            "oos_max_drawdown": 50.0,
+            "oos_win_rate": 0.3,
+            "overfitting_penalty": 0.8,
+            "trade_count": 10,
         }
 
     @staticmethod

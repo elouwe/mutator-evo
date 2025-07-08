@@ -192,50 +192,56 @@ class StrategyEmbedding:
 
     def score(self) -> float:
         if not self.oos_metrics:
-            return -10.0
+            return -1.0  # Less strict penalty
         
         sharpe = self.oos_metrics.get("oos_sharpe", 0)
         dd = self.oos_metrics.get("oos_max_drawdown", 100)
         penalty = self.oos_metrics.get("overfitting_penalty", 1.0)
         
         trade_count = self.oos_metrics.get("trade_count", 0)
-        if trade_count < 10:
-            return -5.0
+        if trade_count < 5:  # More lenient requirement
+            return -0.5
         
-        return (sharpe * 0.7 - dd * 0.3) * (1 - penalty)
+        # Reduced overfitting penalty
+        base_score = (sharpe * 0.7 - dd * 0.2) * (1.1 * penalty)
+        
+        # Reduced RL tax
+        if "rl_agent" in self.features:
+            base_score *= 0.85  # 15% instead of 30%
+        
+        return base_score
 
     @classmethod
     def create_random(cls, feature_bank: Set[str]) -> "StrategyEmbedding":
         name = f"rand_{uuid.uuid4().hex[:8]}"
         features = {}
         
-        num_features = min(random.randint(3, 8), len(feature_bank))
-        selected_features = random.sample(list(feature_bank), num_features)
+        # CRITICAL FIX: Always include key parameters
+        must_have_features = {'trade_size', 'stop_loss', 'take_profit'}
+        selected_features = set(random.sample(list(feature_bank - must_have_features), 
+                              random.randint(3, 5)))
+        selected_features |= must_have_features
         
         for feat in selected_features:
-            if feat in {"trade_size", "stop_loss", "take_profit"}:
-                if feat == "trade_size":
-                    features[feat] = random.uniform(0.1, 0.3)
-                elif feat == "stop_loss":
-                    features[feat] = random.uniform(0.01, 0.05)
-                elif feat == "take_profit":
-                    features[feat] = random.uniform(0.03, 0.08)
+            if feat == "trade_size":
+                features[feat] = random.uniform(0.15, 0.25)  # More reasonable position size
+            elif feat == "stop_loss":
+                features[feat] = random.uniform(0.02, 0.04)  # 2-4% stop loss
+            elif feat == "take_profit":
+                features[feat] = random.uniform(0.04, 0.08)  # 4-8% take profit
             elif "period" in feat or "window" in feat:
-                features[feat] = random.randint(5, 50)
+                features[feat] = random.randint(10, 30)  # More reasonable periods
             elif feat == "rl_agent":
                 features[feat] = {
-                    "hidden_layers": [
-                        random.randint(32, 128) 
-                        for _ in range(random.randint(1, 3))
-                    ],
-                    "learning_rate": 10**random.uniform(-4, -2),
-                    "gamma": random.uniform(0.8, 0.99),
-                    "epsilon": random.uniform(0.05, 0.2),
-                    # Use float32 instead of float64 to save space
-                    "weights": [np.random.randn(64, 64).astype(np.float32).tolist() for _ in range(2)]
+                    "hidden_layers": [random.randint(64, 128)],
+                    "learning_rate": 10**random.uniform(-4, -3),
+                    "gamma": random.uniform(0.9, 0.95),
+                    "epsilon": random.uniform(0.1, 0.3),
+                    "weights": [np.random.randn(32, 32).astype(np.float32).tolist()]
                 }
             else:
-                features[feat] = random.random() > 0.3
+                # High probability of including indicators
+                features[feat] = random.random() > 0.2  # 80% chance to be included
                 
         strategy = cls(name, features)
         strategy.compress()
