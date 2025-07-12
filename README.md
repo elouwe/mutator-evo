@@ -135,6 +135,13 @@ Clone the repo and install dependencies:
 ```bash
 git clone https://github.com/elouwe/mutator-evo.git
 cd mutator-evo
+```
+
+## 🧪 Running the Evolution
+
+Start the evolution process:
+
+```bash
 echo "from setuptools import setup, find_packages
 setup(
     name='mutator_evo',
@@ -145,14 +152,7 @@ setup(
 
 pip install -r requirements.txt
 pip install -e .
-```
-
-## 🧪 Running the Evolution
-
-Start the evolution process:
-
-```bash
-python -m mutator_evo.scripts.run_evolution
+python -m src.mutator_evo.scripts.run_evolution
 ```
 
 You can modify the config file in `configs/` to set:
